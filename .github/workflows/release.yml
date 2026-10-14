@@ -1,19 +1,45 @@
-name: Release AGOA Launcher
+# Publie AGOA-Launcher.exe dans une Release dès que LAUNCHER_VERSION change sur main.
+# L'étiquette vX.Y.Z est créée automatiquement avec la Release.
+name: Publication AGOA Launcher
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+    paths:
+      - "agoa_launcher.py"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
 permissions:
   contents: write
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Version à publier
+        id: v
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep -oP '^LAUNCHER_VERSION = "\K[^"]+' agoa_launcher.py)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            echo "La Release v$VERSION existe déjà : rien à publier."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-python@v5
+        if: steps.v.outputs.skip == 'false'
         with: { python-version: "3.12" }
-      - run: pip install pyinstaller
-      - run: pyinstaller --noconsole --onefile --name AGOA-Launcher agoa_launcher.py
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: dist/AGOA-Launcher.exe
-          generate_release_notes: true
+      - name: Compilation
+        if: steps.v.outputs.skip == 'false'
+        run: |
+          pip install pyinstaller
+          pyinstaller --noconsole --onefile --name AGOA-Launcher agoa_launcher.py
+      - name: Publication
+        if: steps.v.outputs.skip == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "v${{ steps.v.outputs.version }}" dist/AGOA-Launcher.exe --title "AGOA Launcher ${{ steps.v.outputs.version }}" --generate-notes --target "${{ github.sha }}"
