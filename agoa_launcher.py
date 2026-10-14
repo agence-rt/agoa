@@ -24,7 +24,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.3.0"
+LAUNCHER_VERSION = "0.3.1"
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
 # --- Dossier unique d'installation ---------------------------------------
@@ -172,24 +172,28 @@ class Store:
         return self.settings.get("github_token") or os.environ.get("GITHUB_TOKEN")
 
     def catalog_local(self):
-        return load_json(os.path.join(base_dir(), "catalog.json"), {"apps": []})
+        """Copie du catalogue embarquée dans l'exe (ou à côté du script)."""
+        for d in (getattr(sys, "_MEIPASS", None), base_dir()):
+            if d and os.path.exists(os.path.join(d, "catalog.json")):
+                return load_json(os.path.join(d, "catalog.json"), {"apps": []})
+        return {"apps": []}
 
     def load_catalog(self):
-        """Catalogue : celui du dépôt du lanceur (à jour) sinon cache sinon fichier local."""
-        local = self.catalog_local()
-        repo = (local.get("launcher") or {}).get("repo")
-        if repo:
-            try:
-                url = f"https://raw.githubusercontent.com/{repo}/main/catalog.json"
-                with gh_open(url, self.token, accept="*/*", timeout=10) as r:
-                    cat = json.loads(r.read().decode("utf-8"))
+        """Catalogue : dépôt GitHub du lanceur (à jour) > cache > copie embarquée. Retourne (catalogue, erreur)."""
+        err = None
+        try:
+            url = f"https://raw.githubusercontent.com/{LAUNCHER_REPO}/main/catalog.json"
+            with gh_open(url, self.token, accept="*/*", timeout=10) as r:
+                cat = json.loads(r.read().decode("utf-8"))
+            if cat.get("apps"):
                 save_json(CATALOG_CACHE, cat)
-                return cat
-            except Exception:
-                cached = load_json(CATALOG_CACHE, None)
-                if cached:
-                    return cached
-        return local
+                return cat, None
+        except Exception as e:
+            err = f"Catalogue GitHub injoignable ({e})"
+        cached = load_json(CATALOG_CACHE, None)
+        if cached and cached.get("apps"):
+            return cached, err
+        return self.catalog_local(), err
 
     def exe_path(self, app):
         """Chemin de l'exécutable installé (C:\\AGOA\\<id>\\<exe>)."""
@@ -314,7 +318,10 @@ class AgoaLauncher(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"{APP_NAME} — Suite AGOA")
-        self.geometry("1320x720")
+        self.S = max(1.0, self.winfo_fpixels("1i") / 96.0)  # échelle d'affichage (125 %, 150 %…)
+        w = min(int(1320 * self.S), self.winfo_screenwidth() - 80)
+        h = min(int(720 * self.S), self.winfo_screenheight() - 120)
+        self.geometry(f"{w}x{h}")
         self.minsize(900, 560)
         self.configure(bg=BG)
         self.store = Store()
@@ -327,12 +334,13 @@ class AgoaLauncher(tk.Tk):
         self.query.trace_add("write", lambda *a: self.render())
         self.busy = {}
         self.asked_update = False
+        self.catalog_error = None
         self.build_chrome()
         self.refresh()
 
     # --- barre supérieure -------------------------------------------------
     def build_chrome(self):
-        top = tk.Frame(self, bg=BG, height=44)
+        top = tk.Frame(self, bg=BG, height=int(44 * self.S))
         top.pack(fill="x")
         top.pack_propagate(False)
         logo = tk.Canvas(top, width=34, height=34, bg=BG, highlightthickness=0)
@@ -402,7 +410,8 @@ class AgoaLauncher(tk.Tk):
             except Exception:
                 pass
             # 2) puis le catalogue et les programmes
-            cat = self.store.load_catalog()
+            cat, cerr = self.store.load_catalog()
+            self.catalog_error = cerr
             self.after(0, self.set_catalog, cat)
             for a in cat.get("apps", []):
                 try:
@@ -447,6 +456,8 @@ class AgoaLauncher(tk.Tk):
         lr = self.launcher_rel
         if lr and vtuple(lr["version"]) > vtuple(LAUNCHER_VERSION):
             self.banner(f"AGOA Launcher {lr['version']} est disponible.", "Mettre à jour et redémarrer", self.do_update_launcher)
+        if self.catalog_error:
+            self.banner(self.catalog_error + " — liste affichée hors ligne.", "Réessayer", self.refresh)
         if c["maj"]:
             self.banner(f"{c['maj']} programme(s) AGOA ont une nouvelle version.", "Tout mettre à jour", self.update_all)
 
@@ -469,7 +480,7 @@ class AgoaLauncher(tk.Tk):
         tk.Label(self.grid_frame, text="01 / PROGRAMMES AGOA", font=MONO, bg=BG, fg=MUTED).grid(
             row=0, column=0, sticky="w", pady=(10, 8), columnspan=6)
         width = max(self.canvas.winfo_width(), 900)
-        cols = max(1, width // 330)
+        cols = max(1, width // int(330 * self.S))
         for i in range(cols):
             self.grid_frame.columnconfigure(i, weight=1, uniform="c")
         for idx, (a, s) in enumerate(apps):
@@ -485,10 +496,11 @@ class AgoaLauncher(tk.Tk):
         Flat(b, action, cmd, padx=14, pady=6).pack(side="right", padx=10)
 
     def icon(self, parent, code):
-        cv = tk.Canvas(parent, width=60, height=60, bg=CARD, highlightthickness=0)
-        cv.create_rectangle(0, 0, 60, 60, fill=RED, outline=RED)
+        px = int(60 * self.S)
+        cv = tk.Canvas(parent, width=px, height=px, bg=CARD, highlightthickness=0)
+        cv.create_rectangle(0, 0, px, px, fill=RED, outline=RED)
         size = 20 if len(code) <= 2 else 15 if len(code) == 3 else 12
-        cv.create_text(30, 30, text=code, fill="white", font=("Segoe UI", size, "bold"))
+        cv.create_text(px // 2, px // 2, text=code, fill="white", font=("Segoe UI", size, "bold"))
         return cv
 
     def badge(self, parent, text, bg, fg):
@@ -513,7 +525,7 @@ class AgoaLauncher(tk.Tk):
         title.pack(anchor="w")
         tk.Label(title, text="AGOA ", font=("Segoe UI", 15, "bold"), bg=CARD, fg=INK).pack(side="left")
         tk.Label(title, text=a["code"], font=("Segoe UI", 15, "bold"), bg=CARD, fg=RED).pack(side="left")
-        tk.Label(txt, text=a["description"], font=("Segoe UI", 9), bg=CARD, fg="#444", wraplength=210,
+        tk.Label(txt, text=a["description"], font=("Segoe UI", 9), bg=CARD, fg="#444", wraplength=int(210 * self.S),
                  justify="left", anchor="w").pack(anchor="w", pady=(2, 0))
 
         iv = self.store.installed_version(a["id"], a)
@@ -534,7 +546,7 @@ class AgoaLauncher(tk.Tk):
             info = self.errors[a["id"]]
         else:
             info = " "
-        tk.Label(f, text=info, font=("Segoe UI", 9), bg=CARD, fg=INK, wraplength=260, justify="left",
+        tk.Label(f, text=info, font=("Segoe UI", 9), bg=CARD, fg=INK, wraplength=int(260 * self.S), justify="left",
                  anchor="w").pack(anchor="w", pady=(10, 12), fill="x")
 
         row = tk.Frame(f, bg=CARD)
@@ -645,5 +657,17 @@ class AgoaLauncher(tk.Tk):
             self.render()
 
 
+def enable_hidpi():
+    """Rend le processus « DPI aware » : sinon Windows étire la fenêtre en bitmap (texte flou)."""
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
 if __name__ == "__main__":
+    enable_hidpi()
     AgoaLauncher().mainloop()

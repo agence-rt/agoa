@@ -36,7 +36,7 @@ jobs:
         if: steps.v.outputs.skip == 'false'
         run: |
           pip install pyinstaller
-          pyinstaller --noconsole --onefile --name AGOA-Launcher agoa_launcher.py
+          pyinstaller --noconsole --onefile --add-data "catalog.json;." --name AGOA-Launcher agoa_launcher.py
       - name: Publication
         if: steps.v.outputs.skip == 'false'
         shell: bash
