@@ -1,24 +1,21 @@
 {
-  "_aide": "Catalogue des programmes AGOA. 'repo' = dépôt GitHub (propriétaire/nom). La version affichée = dernière Release du dépôt. 'asset' = motif du fichier de la release à installer (ex. *.zip). 'entry' = fichier à lancer une fois installé. Ce fichier est relu depuis le dépôt du lanceur : ajouter un programme = modifier ce fichier, sans recompiler.",
+  "_aide": "Catalogue des programmes AGOA. 'repo' = dépôt GitHub. Version affichée = dernière Release. 'asset' = motif du fichier de la release (installateur *-Setup-*.exe ou .zip). 'exe' = programme installé dans C:\\AGOA\\<id>. Relu depuis le dépôt du lanceur : ajouter un programme = modifier ce fichier, sans recompiler.",
   "launcher": { "repo": "agence-rt/agoa", "asset": "AGOA-Launcher.exe" },
   "apps": [
     { "id": "cctp", "code": "CCTP", "nom": "AGOA CCTP",
-      "description": "Rédaction des cahiers des clauses techniques particulières",
-      "repo": "agence-rt/agoa-cctp", "asset": "*.zip", "entry": "AGOA-CCTP.exe" },
+      "description": "Rédaction des CCTP et BPU, consultation des entreprises, comparatif des offres",
+      "repo": "agence-rt/agoa-cctp", "asset": "AGOA-CCTP-Setup-*.exe", "exe": "AGOA CCTP.exe" },
     { "id": "pv", "code": "PV", "nom": "AGOA PV",
-      "description": "Procès-verbaux de réception et de réunion de chantier",
-      "repo": "agence-rt/agoa-pv", "asset": "*.zip", "entry": "AGOA-PV.exe" },
+      "description": "Suivi de chantier et rédaction des procès-verbaux de réunion",
+      "repo": "agence-rt/agoa-rv", "asset": "AGOA-PV-Setup-*.exe", "exe": "AGOA PV.exe" },
     { "id": "dgd", "code": "DGD", "nom": "AGOA DGD",
-      "description": "Décompte général définitif et suivi financier des marchés",
-      "repo": "agence-rt/agoa-dgd", "asset": "*.zip", "entry": "AGOA-DGD.exe" },
-    { "id": "rv", "code": "RV", "nom": "AGOA RV",
-      "description": "Rapports de visite : observations, photos et désordres",
-      "repo": "agence-rt/agoa-rv", "asset": "*.zip", "entry": "AGOA-RV.exe" },
+      "description": "Décompte général définitif : lots, engagements, factures, synthèse",
+      "repo": "agence-rt/agoa-dgd", "asset": "AGOA-DGD-Setup-*.exe", "exe": "AGOA DGD.exe" },
     { "id": "dtg", "code": "DTG", "nom": "AGOA DTG",
-      "description": "Diagnostic technique global et projet de plan pluriannuel de travaux",
-      "repo": "agence-rt/agoa-dtg", "asset": "*.zip", "entry": "dtg-atelier.html" },
+      "description": "Atelier DTG : diagnostic technique global et plan pluriannuel de travaux",
+      "repo": "agence-rt/agoa-dtg", "asset": "AGOA-DTG-Setup-*.exe", "exe": "AGOA DTG.exe" },
     { "id": "todo", "code": "TODO", "nom": "AGOA TODO",
       "description": "Suivi des tâches et relances par dossier",
-      "repo": "agence-rt/agoa-todo", "asset": "*.zip", "entry": "AGOA-TODO.exe" }
+      "repo": "agence-rt/agoa-todo", "asset": "AGOA-TODO-Setup-*.exe", "exe": "AGOA TODO.exe" }
   ]
 }

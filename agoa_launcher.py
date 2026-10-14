@@ -17,11 +17,15 @@ import urllib.error
 import urllib.request
 import urllib.parse
 import zipfile
+import ctypes
+import glob
+from ctypes import wintypes
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.2.0"
+LAUNCHER_VERSION = "0.3.0"
+LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
 # --- Dossier unique d'installation ---------------------------------------
 ROOT = os.environ.get("AGOA_HOME", r"C:\AGOA")
@@ -75,6 +79,25 @@ def vtuple(v):
 
 def clean_tag(tag):
     return str(tag).lstrip("vV")
+
+
+def file_version(path):
+    """Version d'un .exe Windows (X.Y.Z) lue dans ses ressources ; None si illisible."""
+    try:
+        ver = ctypes.windll.version
+        size = ver.GetFileVersionInfoSizeW(path, None)
+        if not size:
+            return None
+        buf = ctypes.create_string_buffer(size)
+        ver.GetFileVersionInfoW(path, 0, size, buf)
+        ptr, ln = ctypes.c_void_p(), ctypes.c_uint()
+        if not ver.VerQueryValueW(buf, "\\", ctypes.byref(ptr), ctypes.byref(ln)):
+            return None
+        info = ctypes.cast(ptr, ctypes.POINTER(ctypes.c_uint32 * 6)).contents
+        ms, ls = info[2], info[3]
+        return f"{ms >> 16}.{ms & 0xFFFF}.{ls >> 16}"
+    except Exception:
+        return None
 
 
 # --- GitHub ----------------------------------------------------------------
@@ -168,18 +191,39 @@ class Store:
                     return cached
         return local
 
-    def installed_version(self, app_id):
+    def exe_path(self, app):
+        """Chemin de l'exécutable installé (C:\\AGOA\\<id>\\<exe>)."""
+        d = self.app_dir(app["id"])
+        exe = app.get("exe") or app.get("entry")
+        if exe:
+            p = os.path.join(d, exe)
+            if os.path.exists(p):
+                return p
+            for root, _, files in os.walk(d):
+                if exe in files:
+                    return os.path.join(root, exe)
+        return None
+
+    def installed_version(self, app_id, app=None):
+        """Version réellement installée : lue sur l'exe (les applications se mettent aussi à jour seules)."""
+        if app is not None:
+            p = self.exe_path(app)
+            if p:
+                return file_version(p) or self.state.get(app_id, {}).get("version") or "0"
+            return None
         return self.state.get(app_id, {}).get("version")
 
     def app_dir(self, app_id):
         return os.path.join(APPS_DIR, app_id)
 
+    def is_installed(self, app):
+        return self.exe_path(app) is not None
+
     def status(self, app, rel):
-        iv = self.installed_version(app["id"])
-        is_inst = bool(iv) and os.path.isdir(self.app_dir(app["id"]))
+        iv = self.installed_version(app["id"], app)
         if rel is None:
-            return "ok" if is_inst else "inconnu"
-        if is_inst:
+            return "ok" if iv else "inconnu"
+        if iv:
             return "maj" if vtuple(rel["version"]) > vtuple(iv) else "ok"
         return "absent"
 
@@ -190,16 +234,27 @@ class Store:
         try:
             local = os.path.join(tmpdir, asset["name"])
             gh_download(asset, local, self.token, progress)
-            staging = dest + ".new"
-            shutil.rmtree(staging, ignore_errors=True)
-            os.makedirs(staging)
             if zipfile.is_zipfile(local):
+                staging = dest + ".new"
+                shutil.rmtree(staging, ignore_errors=True)
+                os.makedirs(staging)
                 with zipfile.ZipFile(local) as z:
                     z.extractall(staging)
+                shutil.rmtree(dest, ignore_errors=True)
+                os.replace(staging, dest)
+            elif asset["name"].lower().endswith(".exe") and "setup" in asset["name"].lower():
+                # Installateur NSIS (electron-builder) : /S = silencieux, /D = dossier (doit être en dernier)
+                os.makedirs(dest, exist_ok=True)
+                args = [local, "/S", f"/D={dest}"]
+                subprocess.run(args, check=False, timeout=900)
+                if not self.exe_path(app):
+                    # repli : assistant visible, dossier proposé = C:\\AGOA\\<id>
+                    subprocess.run([local, f"/D={dest}"], check=False, timeout=1800)
+                if not self.exe_path(app):
+                    raise RuntimeError("L'installation ne s'est pas terminée (installateur fermé ?)")
             else:
-                shutil.copy(local, os.path.join(staging, asset["name"]))
-            shutil.rmtree(dest, ignore_errors=True)
-            os.replace(staging, dest)
+                os.makedirs(dest, exist_ok=True)
+                shutil.copy(local, os.path.join(dest, asset["name"]))
             self.state[app["id"]] = {"version": rel["version"], "asset": asset["name"]}
             save_json(STATE_FILE, self.state)
             if progress:
@@ -208,22 +263,20 @@ class Store:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
     def uninstall(self, app):
-        shutil.rmtree(self.app_dir(app["id"]), ignore_errors=True)
+        d = self.app_dir(app["id"])
+        for u in glob.glob(os.path.join(d, "Uninstall*.exe")):
+            try:
+                subprocess.run([u, "/S", f"_?={d}"], check=False, timeout=300)
+            except Exception:
+                pass
+        shutil.rmtree(d, ignore_errors=True)
         self.state.pop(app["id"], None)
         save_json(STATE_FILE, self.state)
 
     def launch(self, app):
-        d = self.app_dir(app["id"])
-        entry = app.get("entry") or self.state.get(app["id"], {}).get("asset", "")
-        path = os.path.join(d, entry)
-        if not os.path.exists(path):
-            path = None
-            for root, _, files in os.walk(d):
-                if entry in files:
-                    path = os.path.join(root, entry)
-                    break
+        path = self.exe_path(app)
         if not path:
-            raise FileNotFoundError(f"Point d'entrée introuvable : {entry}")
+            raise FileNotFoundError(f"{app['nom']} est introuvable dans {self.app_dir(app['id'])}")
         if hasattr(os, "startfile"):
             os.startfile(path)
         else:
@@ -273,6 +326,7 @@ class AgoaLauncher(tk.Tk):
         self.query = tk.StringVar()
         self.query.trace_add("write", lambda *a: self.render())
         self.busy = {}
+        self.asked_update = False
         self.build_chrome()
         self.refresh()
 
@@ -338,15 +392,18 @@ class AgoaLauncher(tk.Tk):
         self.launcher_rel = None
 
         def work():
+            tok = self.store.token
+            # 1) le lanceur se vérifie lui-même en premier
+            try:
+                self.launcher_rel = gh_latest_release(LAUNCHER_REPO, tok)
+                if vtuple(self.launcher_rel["version"]) > vtuple(LAUNCHER_VERSION) and not self.asked_update:
+                    self.asked_update = True
+                    self.after(0, self.prompt_launcher_update)
+            except Exception:
+                pass
+            # 2) puis le catalogue et les programmes
             cat = self.store.load_catalog()
             self.after(0, self.set_catalog, cat)
-            tok = self.store.token
-            lrepo = (cat.get("launcher") or {}).get("repo")
-            if lrepo:
-                try:
-                    self.launcher_rel = gh_latest_release(lrepo, tok)
-                except Exception:
-                    pass
             for a in cat.get("apps", []):
                 try:
                     self.releases[a["id"]] = gh_latest_release(a["repo"], tok)
@@ -459,7 +516,7 @@ class AgoaLauncher(tk.Tk):
         tk.Label(txt, text=a["description"], font=("Segoe UI", 9), bg=CARD, fg="#444", wraplength=210,
                  justify="left", anchor="w").pack(anchor="w", pady=(2, 0))
 
-        iv = self.store.installed_version(a["id"])
+        iv = self.store.installed_version(a["id"], a)
         if s == "verif":
             self.badge(f, "Vérification…", GREY_BG, GREY_FG).pack(anchor="w")
         elif s == "inconnu":
@@ -501,7 +558,7 @@ class AgoaLauncher(tk.Tk):
 
     def menu(self, event, a):
         m = tk.Menu(self, tearoff=0)
-        if self.store.installed_version(a["id"]):
+        if self.store.is_installed(a):
             m.add_command(label="Ouvrir le dossier d'installation", command=lambda: os.startfile(self.store.app_dir(a["id"])))
             if self.releases.get(a["id"]):
                 m.add_command(label="Réinstaller", command=lambda: self.do_install(a))
@@ -557,8 +614,16 @@ class AgoaLauncher(tk.Tk):
             if self.st(a) == "maj":
                 self.do_install(a)
 
+    def prompt_launcher_update(self):
+        v = self.launcher_rel["version"]
+        if not getattr(sys, "frozen", False):
+            return
+        if messagebox.askyesno(APP_NAME, f"AGOA Launcher {v} est disponible (vous avez {LAUNCHER_VERSION}).\n\n"
+                                         "Mettre à jour maintenant ? Le lanceur redémarrera."):
+            self.do_update_launcher()
+
     def do_update_launcher(self):
-        pattern = (self.catalog.get("launcher") or {}).get("asset", "*.exe")
+        pattern = (self.catalog.get("launcher") or {}).get("asset", "AGOA-Launcher.exe")
 
         def work():
             try:
