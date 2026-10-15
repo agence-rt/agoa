@@ -25,7 +25,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.4.0"
+LAUNCHER_VERSION = "0.4.1"
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
 # --- Dossier unique d'installation ---------------------------------------
@@ -198,7 +198,7 @@ class Store:
         """Catalogue : dépôt GitHub du lanceur (à jour) > cache > copie embarquée. Retourne (catalogue, erreur)."""
         err = None
         try:
-            url = f"https://raw.githubusercontent.com/{LAUNCHER_REPO}/main/catalog.json"
+            url = f"https://raw.githubusercontent.com/{LAUNCHER_REPO}/main/catalog.json?t={int(time.time())}"  # ?t= : contourne le cache de GitHub
             with gh_open(url, self.token, accept="*/*", timeout=10) as r:
                 cat = json.loads(r.read().decode("utf-8"))
             if cat.get("apps"):
