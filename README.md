@@ -1,6 +1,13 @@
 # AGOA Launcher
-Lanceur Windows des applications AGOA (installation, mise à jour, ouverture) — installe tout sous `C:\AGOA`.
+Application Windows qui installe, met à jour et ouvre les applications AGOA de l'agence (dans `C:\AGOA`).
 
-- `catalog.json` : liste des programmes et de leurs dépôts GitHub (relu automatiquement par le lanceur).
-- Publier une version du lanceur : augmenter `LAUNCHER_VERSION` dans `agoa_launcher.py` puis pousser sur `main` → GitHub Actions compile `AGOA-Launcher.exe` et crée la release (étiquette automatique).
-- Chaque programme publie une release contenant un `.zip`.
+## Installer
+Télécharger `AGOA-Launcher-Setup-x.y.z.exe` dans la [dernière Release](https://github.com/agence-rt/agoa/releases/latest) et le lancer.
+Le lanceur s'installe dans `C:\AGOA\Launcher` (raccourcis bureau + menu Démarrer) et se met à jour seul au démarrage.
+
+## Publier une version
+Augmenter `LAUNCHER_VERSION` dans `agoa_launcher.py` puis pousser sur `main` : GitHub Actions compile le programme,
+fabrique l'installateur (`installer.nsi`) et crée la Release (étiquette automatique).
+
+## Catalogue
+`catalog.json` liste les applications et leurs dépôts ; il est relu sur GitHub à chaque démarrage (pas besoin de recompiler).

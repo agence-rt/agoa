@@ -1,11 +1,13 @@
-# Publie AGOA-Launcher.exe dans une Release dès que LAUNCHER_VERSION change sur main.
-# L'étiquette vX.Y.Z est créée automatiquement avec la Release.
+# Compile AGOA Launcher, fabrique son installateur et publie la Release
+# dès que LAUNCHER_VERSION change sur main. L'étiquette vX.Y.Z est créée automatiquement.
 name: Publication AGOA Launcher
 on:
   push:
     branches: [main]
     paths:
       - "agoa_launcher.py"
+      - "installer.nsi"
+      - "icon.ico"
       - ".github/workflows/release.yml"
   workflow_dispatch:
 permissions:
@@ -32,14 +34,26 @@ jobs:
       - uses: actions/setup-python@v5
         if: steps.v.outputs.skip == 'false'
         with: { python-version: "3.12" }
-      - name: Compilation
+      - name: Compilation du programme
         if: steps.v.outputs.skip == 'false'
         run: |
           pip install pyinstaller
-          pyinstaller --noconsole --onefile --add-data "catalog.json;." --name AGOA-Launcher agoa_launcher.py
+          pyinstaller --noconsole --onefile --icon icon.ico --add-data "catalog.json;." --add-data "icon.ico;." --name AGOA-Launcher agoa_launcher.py
+      - name: Fabrication de l'installateur
+        if: steps.v.outputs.skip == 'false'
+        shell: pwsh
+        run: |
+          $nsis = (Get-Command makensis -ErrorAction SilentlyContinue).Source
+          if (-not $nsis) { $nsis = "C:\Program Files (x86)\NSIS\makensis.exe" }
+          if (-not (Test-Path $nsis)) { choco install nsis -y --no-progress; $nsis = "C:\Program Files (x86)\NSIS\makensis.exe" }
+          & $nsis "/DVERSION=${{ steps.v.outputs.version }}" installer.nsi
+          if ($LASTEXITCODE -ne 0) { exit 1 }
       - name: Publication
         if: steps.v.outputs.skip == 'false'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "v${{ steps.v.outputs.version }}" dist/AGOA-Launcher.exe --title "AGOA Launcher ${{ steps.v.outputs.version }}" --generate-notes --target "${{ github.sha }}"
+        run: |
+          # AGOA-Launcher.exe (seul) reste publié : les anciennes versions s'en servent pour se mettre à jour
+          gh release create "v${{ steps.v.outputs.version }}" dist/AGOA-Launcher.exe "dist/AGOA-Launcher-Setup-${{ steps.v.outputs.version }}.exe" \
+            --title "AGOA Launcher ${{ steps.v.outputs.version }}" --generate-notes --target "${{ github.sha }}"

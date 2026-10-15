@@ -1,8 +1,5 @@
 @echo off
-rem Construit AGOA-Launcher.exe (une seule fois, sur un poste avec Python)
+rem Construit AGOA-Launcher.exe (test local ; la publication se fait par GitHub Actions)
 py -m pip install --upgrade pyinstaller
-py -m PyInstaller --noconsole --onefile --add-data "catalog.json;." --name AGOA-Launcher agoa_launcher.py
-copy /Y catalog.json dist\catalog.json
-echo.
-echo Termine : dist\AGOA-Launcher.exe  +  dist\catalog.json
+py -m PyInstaller --noconsole --onefile --icon icon.ico --add-data "catalog.json;." --add-data "icon.ico;." --name AGOA-Launcher agoa_launcher.py
 pause

@@ -19,12 +19,13 @@ import urllib.parse
 import zipfile
 import ctypes
 import glob
+import time
 from ctypes import wintypes
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.3.1"
+LAUNCHER_VERSION = "0.4.0"
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
 # --- Dossier unique d'installation ---------------------------------------
@@ -39,9 +40,11 @@ CONFIG_DIR = os.path.join(ROOT, "_launcher")
 STATE_FILE = os.path.join(CONFIG_DIR, "state.json")
 SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
 CATALOG_CACHE = os.path.join(CONFIG_DIR, "catalog.cache.json")
+INSTALL_DIR = os.path.join(ROOT, "Launcher")           # C:\\AGOA\\Launcher\\AGOA-Launcher.exe
+SETUP_PATTERN = "AGOA-Launcher-Setup-*.exe"
 
 # --- Charte AGOA : rouge agence, carré + code en gras --------------------
-RED = "#C8102E"
+RED = "#B3261E"  # rouge agence (identique aux autres applications AGOA)
 BG = "#F3F2EE"
 CARD = "#F3F2EE"
 INK = "#111111"
@@ -53,6 +56,19 @@ ORANGE_BG, ORANGE_FG = "#FBEBD9", "#B45F06"
 GREY_BG, GREY_FG = "#E8E6DF", "#7A7A75"
 MONO = ("Consolas", 8)
 MONO_B = ("Consolas", 8, "bold")
+
+
+def resource_path(name):
+    base = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, name)
+
+
+def is_installed_launcher():
+    """Vrai si l'exe tourne depuis C:\\AGOA\\Launcher (installé par l'installateur)."""
+    if not getattr(sys, "frozen", False):
+        return False
+    here = os.path.normcase(os.path.abspath(os.path.dirname(sys.executable)))
+    return here == os.path.normcase(os.path.abspath(INSTALL_DIR))
 
 
 def base_dir():
@@ -286,18 +302,31 @@ class Store:
         else:
             subprocess.Popen([path])
 
-    def update_launcher(self, rel, pattern, progress=None):
-        """Télécharge le nouvel exe puis le remplace après fermeture du lanceur."""
+    def update_launcher(self, rel, progress=None):
+        """Télécharge l'installateur du lanceur (à défaut l'exe seul), puis l'applique après fermeture."""
         if not getattr(sys, "frozen", False):
-            raise RuntimeError("Mise à jour automatique disponible uniquement dans AGOA-Launcher.exe")
-        asset = pick_asset(rel, pattern or "*.exe")
-        exe = sys.executable
-        new = exe + ".new"
-        gh_download(asset, new, self.token, progress)
+            raise RuntimeError("Mise à jour automatique disponible uniquement dans le programme installé")
+        os.makedirs(CONFIG_DIR, exist_ok=True)
         bat = os.path.join(CONFIG_DIR, "update.bat")
+        try:
+            asset = pick_asset(rel, SETUP_PATTERN)
+        except RuntimeError:
+            asset = None
+        if asset:
+            setup = os.path.join(CONFIG_DIR, asset["name"])
+            gh_download(asset, setup, self.token, progress)
+            target = os.path.join(INSTALL_DIR, "AGOA-Launcher.exe")
+            lines = ["@echo off", "timeout /t 3 /nobreak >nul", f'start /wait "" "{setup}" /S',
+                     f'del "{setup}"', f'start "" "{target}"', 'del "%~f0"']
+        else:  # ancien mode : remplacement de l'exe seul
+            asset = pick_asset(rel, "AGOA-Launcher.exe")
+            exe = sys.executable
+            new = exe + ".new"
+            gh_download(asset, new, self.token, progress)
+            lines = ["@echo off", "timeout /t 3 /nobreak >nul", f'move /Y "{new}" "{exe}"',
+                     f'start "" "{exe}"', 'del "%~f0"']
         with open(bat, "w", encoding="utf-8") as f:
-            f.write(f'@echo off\r\ntimeout /t 2 /nobreak >nul\r\nmove /Y "{new}" "{exe}"\r\n'
-                    f'start "" "{exe}"\r\ndel "%~f0"\r\n')
+            f.write("\r\n".join(lines) + "\r\n")
         subprocess.Popen(["cmd", "/c", bat], creationflags=0x08000000)
 
 
@@ -312,6 +341,68 @@ class Flat(tk.Label):
         self.bind("<Button-1>", lambda e: self.command())
         self.bind("<Enter>", lambda e: self.config(bg="#333333" if primary else "#E8E6DF"))
         self.bind("<Leave>", lambda e: self.config(bg=INK if primary else BG))
+
+
+def round_rect(cv, x0, y0, x1, y1, r, **kw):
+    cv.create_rectangle(x0 + r, y0, x1 - r, y1, width=0, **kw)
+    cv.create_rectangle(x0, y0 + r, x1, y1 - r, width=0, **kw)
+    for cx, cy in ((x0, y0), (x1 - 2 * r, y0), (x0, y1 - 2 * r), (x1 - 2 * r, y1 - 2 * r)):
+        cv.create_oval(cx, cy, cx + 2 * r, cy + 2 * r, width=0, **kw)
+
+
+class Splash(tk.Toplevel):
+    """Écran de démarrage (même présentation que les autres applications AGOA)."""
+
+    def __init__(self, master, S, version):
+        super().__init__(master, bg="#FFFFFF")
+        self.S = S
+        self.overrideredirect(True)
+        w, h = int(520 * S), int(340 * S)
+        x, y = (self.winfo_screenwidth() - w) // 2, (self.winfo_screenheight() - h) // 2
+        self.geometry(f"{w}x{h}+{x}+{y}")
+        self.attributes("-topmost", True)
+        box = tk.Frame(self, bg="#FFFFFF", highlightthickness=1, highlightbackground="#DCDCDC")
+        box.pack(fill="both", expand=True)
+        mid = tk.Frame(box, bg="#FFFFFF")
+        mid.place(relx=0.5, rely=0.42, anchor="center")
+        px = int(112 * S)
+        cv = tk.Canvas(mid, width=px, height=px, bg="#FFFFFF", highlightthickness=0)
+        round_rect(cv, 0, 0, px, px, int(22 * S), fill=RED)
+        cv.create_text(px // 2, px // 2, text="AGOA", fill="white", font=("Segoe UI", 26, "bold"))
+        cv.pack()
+        t = tk.Frame(mid, bg="#FFFFFF")
+        t.pack(pady=(int(18 * S), 0))
+        tk.Label(t, text="AGOA ", font=("Segoe UI", 20, "bold"), bg="#FFFFFF", fg="#1F2328").pack(side="left")
+        tk.Label(t, text="LAUNCHER", font=("Segoe UI", 20, "bold"), bg="#FFFFFF", fg=RED).pack(side="left")
+        tk.Label(mid, text="Installation et mise à jour des applications de l'agence", font=("Segoe UI", 10),
+                 bg="#FFFFFF", fg="#666666").pack(pady=(6, 0))
+        self.status = tk.Label(box, text="", font=("Segoe UI", 9), bg="#FFFFFF", fg="#777777")
+        self.status.place(relx=0.5, rely=1.0, y=-int(28 * S), anchor="s")
+        tk.Label(box, text=f"v{version}", font=("Segoe UI", 8), bg="#FFFFFF", fg="#9A9A9A").place(
+            relx=1.0, rely=1.0, x=-12, y=-int(10 * S), anchor="se")
+        self.track = tk.Canvas(box, height=3, bg="#FFFFFF", highlightthickness=0)
+        self.track.place(x=0, rely=1.0, relwidth=1.0, anchor="sw")
+        self.pct, self.pos = None, 0.0
+        self.update_idletasks()
+        self.tick()
+
+    def set_status(self, text, pct=None):
+        self.status.config(text=text or "")
+        self.pct = pct
+
+    def tick(self):
+        try:
+            self.track.delete("all")
+            w = max(self.track.winfo_width(), 1)
+            if self.pct is None:
+                self.pos = (self.pos + 0.012) % 1.3
+                x0 = int((self.pos - 0.3) * w)
+                self.track.create_rectangle(max(x0, 0), 0, min(x0 + int(0.3 * w), w), 3, fill=RED, width=0)
+            else:
+                self.track.create_rectangle(0, 0, int(w * max(2, min(100, self.pct)) / 100), 3, fill=RED, width=0)
+            self.after(16, self.tick)
+        except tk.TclError:
+            pass
 
 
 class AgoaLauncher(tk.Tk):
@@ -333,10 +424,17 @@ class AgoaLauncher(tk.Tk):
         self.query = tk.StringVar()
         self.query.trace_add("write", lambda *a: self.render())
         self.busy = {}
-        self.asked_update = False
         self.catalog_error = None
+        try:
+            self.iconbitmap(resource_path("icon.ico"))
+        except Exception:
+            pass
         self.build_chrome()
-        self.refresh()
+        self.withdraw()                       # la fenêtre principale attend la fin du démarrage
+        self.t0 = time.time()
+        self.splash = Splash(self, self.S, LAUNCHER_VERSION)
+        self.splash.set_status("Recherche de mises à jour…")
+        threading.Thread(target=self.startup_work, daemon=True).start()
 
     # --- barre supérieure -------------------------------------------------
     def build_chrome(self):
@@ -394,33 +492,97 @@ class AgoaLauncher(tk.Tk):
         self.render()
 
     # --- données ---------------------------------------------------------
-    def refresh(self):
-        self.releases = {}
-        self.errors = {}
-        self.launcher_rel = None
+    def startup_work(self):
+        """Thread de démarrage : version du lanceur, puis catalogue."""
+        try:
+            self.launcher_rel = gh_latest_release(LAUNCHER_REPO, self.store.token)
+        except Exception:
+            self.launcher_rel = None
+        self.after(0, self.splash.set_status, "Chargement des applications…")
+        cat, cerr = self.store.load_catalog()
+        self.catalog, self.catalog_error = cat, cerr
+        self.after(0, self.startup_decide)
+
+    def startup_decide(self):
+        lr = self.launcher_rel
+        if getattr(sys, "frozen", False) and lr:
+            if vtuple(lr["version"]) > vtuple(LAUNCHER_VERSION):
+                return self.run_launcher_update(lr)        # mise à jour automatique, comme les autres applications
+            has_setup = any(fnmatch.fnmatch(a["name"].lower(), SETUP_PATTERN.lower()) for a in lr["assets"])
+            if has_setup and not is_installed_launcher() and not self.store.settings.get("no_install_prompt"):
+                self.splash.withdraw()
+                ok = messagebox.askyesno(APP_NAME, "Installer AGOA Launcher sur ce poste ?\n\n"
+                                         f"Il sera placé dans {INSTALL_DIR} avec un raccourci sur le bureau et dans le menu "
+                                         "Démarrer, et se mettra à jour automatiquement.\n"
+                                         "Vos applications AGOA déjà installées sont conservées.")
+                self.splash.deiconify()
+                if ok:
+                    return self.run_launcher_update(lr)
+                self.store.settings["no_install_prompt"] = True
+                save_json(SETTINGS_FILE, self.store.settings)
+        self.finish_startup()
+
+    def run_launcher_update(self, lr):
+        v = lr["version"]
+        self.splash.set_status(f"Téléchargement de la version {v}…", 0)
+
+        def prog(p):
+            self.after(0, self.splash.set_status, f"Téléchargement de la version {v}… {int(p * 100)} %", p * 100)
 
         def work():
-            tok = self.store.token
-            # 1) le lanceur se vérifie lui-même en premier
             try:
-                self.launcher_rel = gh_latest_release(LAUNCHER_REPO, tok)
-                if vtuple(self.launcher_rel["version"]) > vtuple(LAUNCHER_VERSION) and not self.asked_update:
-                    self.asked_update = True
-                    self.after(0, self.prompt_launcher_update)
+                self.store.update_launcher(lr, progress=prog)
+                self.after(0, self.splash.set_status, "Installation en cours — le lanceur va redémarrer…", None)
+                self.after(1500, self.destroy)
+            except Exception as e:
+                self.after(0, self.update_failed, e)
+        threading.Thread(target=work, daemon=True).start()
+
+    def update_failed(self, err):
+        self.splash.withdraw()
+        messagebox.showwarning(APP_NAME, f"La mise à jour du lanceur a échoué :\n\n{err}\n\n"
+                                         "Le lanceur démarre avec la version actuelle.")
+        self.splash.deiconify()
+        self.finish_startup()
+
+    def finish_startup(self):
+        wait = max(0, int((0.9 - (time.time() - self.t0)) * 1000))   # splash visible au moins ~1 s
+        self.splash.set_status("Prêt", 100)
+        self.after(wait, self.show_main)
+
+    def show_main(self):
+        try:
+            self.splash.destroy()
+        except Exception:
+            pass
+        self.deiconify()
+        self.lift()
+        self.render()
+        threading.Thread(target=self.fetch_releases, daemon=True).start()
+
+    def fetch_releases(self):
+        tok = self.store.token
+        for a in self.catalog.get("apps", []):
+            try:
+                self.releases[a["id"]] = gh_latest_release(a["repo"], tok)
+            except Exception as e:
+                self.releases[a["id"]] = None
+                self.errors[a["id"]] = str(e) if isinstance(e, RuntimeError) else "GitHub injoignable"
+            self.after(0, self.render)
+        self.after(0, self.render)
+
+    def refresh(self):
+        """Bouton ⟳ : revérifie le lanceur, le catalogue et les programmes."""
+        self.releases, self.errors = {}, {}
+
+        def work():
+            try:
+                self.launcher_rel = gh_latest_release(LAUNCHER_REPO, self.store.token)
             except Exception:
                 pass
-            # 2) puis le catalogue et les programmes
-            cat, cerr = self.store.load_catalog()
-            self.catalog_error = cerr
-            self.after(0, self.set_catalog, cat)
-            for a in cat.get("apps", []):
-                try:
-                    self.releases[a["id"]] = gh_latest_release(a["repo"], tok)
-                except Exception as e:
-                    self.releases[a["id"]] = None
-                    self.errors[a["id"]] = str(e) if isinstance(e, RuntimeError) else "GitHub injoignable"
-                self.after(0, self.render)
+            self.catalog, self.catalog_error = self.store.load_catalog()
             self.after(0, self.render)
+            self.fetch_releases()
         threading.Thread(target=work, daemon=True).start()
 
     def set_catalog(self, cat):
@@ -626,20 +788,10 @@ class AgoaLauncher(tk.Tk):
             if self.st(a) == "maj":
                 self.do_install(a)
 
-    def prompt_launcher_update(self):
-        v = self.launcher_rel["version"]
-        if not getattr(sys, "frozen", False):
-            return
-        if messagebox.askyesno(APP_NAME, f"AGOA Launcher {v} est disponible (vous avez {LAUNCHER_VERSION}).\n\n"
-                                         "Mettre à jour maintenant ? Le lanceur redémarrera."):
-            self.do_update_launcher()
-
     def do_update_launcher(self):
-        pattern = (self.catalog.get("launcher") or {}).get("asset", "AGOA-Launcher.exe")
-
         def work():
             try:
-                self.store.update_launcher(self.launcher_rel, pattern)
+                self.store.update_launcher(self.launcher_rel)
                 self.after(0, self.destroy)
             except Exception as e:
                 self.after(0, lambda: messagebox.showerror(APP_NAME, str(e)))
