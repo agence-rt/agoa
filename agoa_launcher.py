@@ -13,6 +13,8 @@ import subprocess
 import sys
 import tempfile
 import threading
+import ssl
+import socket
 import urllib.error
 import urllib.request
 import urllib.parse
@@ -25,7 +27,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.4.1"
+LAUNCHER_VERSION = "0.4.2"
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
 # --- Dossier unique d'installation ---------------------------------------
@@ -127,17 +129,84 @@ class _NoAuthOnRedirect(urllib.request.HTTPRedirectHandler):
         return new
 
 
-_opener = urllib.request.build_opener(_NoAuthOnRedirect)
+_opener = urllib.request.build_opener(_NoAuthOnRedirect)                       # proxy du système
+_opener_direct = urllib.request.build_opener(_NoAuthOnRedirect, urllib.request.ProxyHandler({}))  # sans proxy
 
 
 def gh_open(url, token=None, accept="application/vnd.github+json", timeout=20):
+    """Ouvre une URL GitHub : d'abord avec le proxy du système, puis en connexion directe
+    (certains postes ont un proxy mal configuré). Les erreurs HTTP sont remontées telles quelles."""
     headers = {"User-Agent": "AGOA-Launcher", "Accept": accept}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    return _opener.open(urllib.request.Request(url, headers=headers), timeout=timeout)
+    last = None
+    for op in (_opener, _opener_direct):
+        try:
+            return op.open(urllib.request.Request(url, headers=headers), timeout=timeout)
+        except urllib.error.HTTPError:
+            raise
+        except Exception as e:  # réseau, DNS, TLS, délai…
+            last = e
+    raise last
+
+
+def net_reason(e):
+    """Cause lisible d'un échec réseau (court, affichable sur la carte)."""
+    r = getattr(e, "reason", e)
+    if isinstance(e, urllib.error.HTTPError):
+        if e.code == 407:
+            return "Proxy : authentification requise"
+        if e.code in (401, 403):
+            return "Accès refusé par GitHub (limite ou filtrage)"
+        return f"GitHub a répondu {e.code}"
+    if isinstance(r, ssl.SSLError):
+        return "Certificat refusé (pare-feu / antivirus qui filtre HTTPS)"
+    if isinstance(r, socket.gaierror):
+        return "DNS : github.com introuvable (réseau filtré ?)"
+    if isinstance(r, (socket.timeout, TimeoutError)):
+        return "Délai dépassé : GitHub ne répond pas"
+    if isinstance(r, (ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError)):
+        return "Connexion bloquée (pare-feu / proxy)"
+    return "GitHub injoignable : " + (str(r)[:70] or type(r).__name__)
+
+
+def gh_latest_release_web(repo):
+    """Repli sans api.github.com (souvent bloqué ou limité) : pages web publiques de github.com."""
+    with gh_open(f"https://github.com/{repo}/releases/latest", None, accept="text/html", timeout=20) as r:
+        final = r.geturl()
+    m = re.search(r"/releases/tag/([^/?#]+)", final)
+    if not m:
+        raise RuntimeError("Aucune version publiée")
+    tag = urllib.parse.unquote(m.group(1))
+    with gh_open(f"https://github.com/{repo}/releases/expanded_assets/{m.group(1)}", None, accept="text/html", timeout=20) as r:
+        html = r.read().decode("utf-8", "replace")
+    assets, seen = [], set()
+    for href in re.findall(r'href="(/' + re.escape(repo) + r'/releases/download/[^"]+)"', html):
+        name = urllib.parse.unquote(href.rsplit("/", 1)[-1])
+        if name not in seen:
+            seen.add(name)
+            assets.append({"name": name, "url": "https://github.com" + href, "size": 0})
+    return {"version": clean_tag(tag), "date": "", "notes": "", "assets": assets}
 
 
 def gh_latest_release(repo, token=None):
+    """Version publiée (API GitHub, puis repli sur le site web). Lève RuntimeError avec une cause lisible."""
+    try:
+        return _gh_latest_release_api(repo, token)
+    except RuntimeError as e:
+        if "Aucune version" in str(e):
+            raise
+    except Exception:
+        pass
+    try:
+        return gh_latest_release_web(repo)
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(net_reason(e))
+
+
+def _gh_latest_release_api(repo, token=None):
     """Retourne {'version','date','assets':[{name,url,size}]} ou lève une exception."""
     try:
         with gh_open(f"https://api.github.com/repos/{repo}/releases/latest", token) as r:
@@ -205,7 +274,7 @@ class Store:
                 save_json(CATALOG_CACHE, cat)
                 return cat, None
         except Exception as e:
-            err = f"Catalogue GitHub injoignable ({e})"
+            err = f"Catalogue GitHub injoignable ({net_reason(e)})"
         cached = load_json(CATALOG_CACHE, None)
         if cached and cached.get("apps"):
             return cached, err
@@ -567,7 +636,7 @@ class AgoaLauncher(tk.Tk):
                 self.releases[a["id"]] = gh_latest_release(a["repo"], tok)
             except Exception as e:
                 self.releases[a["id"]] = None
-                self.errors[a["id"]] = str(e) if isinstance(e, RuntimeError) else "GitHub injoignable"
+                self.errors[a["id"]] = str(e) if isinstance(e, RuntimeError) else net_reason(e)
             self.after(0, self.render)
         self.after(0, self.render)
 
