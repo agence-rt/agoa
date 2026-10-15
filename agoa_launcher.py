@@ -27,7 +27,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.4.2"
+LAUNCHER_VERSION = "0.4.3"
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
 # --- Dossier unique d'installation ---------------------------------------
@@ -133,9 +133,74 @@ _opener = urllib.request.build_opener(_NoAuthOnRedirect)                       #
 _opener_direct = urllib.request.build_opener(_NoAuthOnRedirect, urllib.request.ProxyHandler({}))  # sans proxy
 
 
+class _CurlResp:
+    """Réponse minimale (comme urllib) lue depuis un fichier temporaire téléchargé par curl.exe."""
+
+    def __init__(self, path, url, length):
+        self._path, self._url = path, url
+        self._f = open(path, "rb")
+        self.headers = {"Content-Length": str(length)}
+
+    def read(self, n=-1):
+        return self._f.read(n)
+
+    def geturl(self):
+        return self._url
+
+    def close(self):
+        try:
+            self._f.close()
+            os.remove(self._path)
+        except OSError:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.close()
+
+
+def _is_ssl_error(e):
+    return isinstance(e, ssl.SSLError) or isinstance(getattr(e, "reason", None), ssl.SSLError)
+
+
+def _curl_open(url, headers, timeout):
+    """Repli TLS : curl.exe (inclus dans Windows 10/11) utilise le magasin de certificats de Windows,
+    comme le navigateur, ce qui fonctionne derrière un antivirus ou un pare-feu qui inspecte HTTPS."""
+    exe = shutil.which("curl.exe") or shutil.which("curl")
+    if not exe:
+        raise OSError("curl introuvable")
+    fd, tmp = tempfile.mkstemp(prefix="agoa-dl-")
+    os.close(fd)
+    big = "octet-stream" in headers.get("Accept", "")
+    cmd = [exe, "-sSL", "--ssl-no-revoke", "--max-time", "1800" if big else str(max(timeout, 30)),
+           "-o", tmp, "-w", "%{url_effective}|%{http_code}", "-A", headers.get("User-Agent", "AGOA-Launcher")]
+    for k, v in headers.items():
+        if k != "User-Agent":
+            cmd += ["-H", f"{k}: {v}"]
+    cmd.append(url)
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, creationflags=flags, timeout=1900 if big else 60)
+        if r.returncode != 0:
+            raise OSError((r.stderr or "").strip() or f"curl a échoué ({r.returncode})")
+        final, _, code = (r.stdout or "").rpartition("|")
+        code = int(code or 0)
+        if code >= 400:
+            raise urllib.error.HTTPError(url, code, "", {}, None)
+        return _CurlResp(tmp, final or url, os.path.getsize(tmp))
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def gh_open(url, token=None, accept="application/vnd.github+json", timeout=20):
-    """Ouvre une URL GitHub : d'abord avec le proxy du système, puis en connexion directe
-    (certains postes ont un proxy mal configuré). Les erreurs HTTP sont remontées telles quelles."""
+    """Ouvre une URL GitHub : proxy du système, puis connexion directe, puis (si le certificat est refusé)
+    curl.exe avec le magasin de certificats de Windows. Les erreurs HTTP sont remontées telles quelles."""
     headers = {"User-Agent": "AGOA-Launcher", "Accept": accept}
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -147,6 +212,13 @@ def gh_open(url, token=None, accept="application/vnd.github+json", timeout=20):
             raise
         except Exception as e:  # réseau, DNS, TLS, délai…
             last = e
+    if _is_ssl_error(last):
+        try:
+            return _curl_open(url, headers, timeout)
+        except urllib.error.HTTPError:
+            raise
+        except Exception:
+            pass
     raise last
 
 
