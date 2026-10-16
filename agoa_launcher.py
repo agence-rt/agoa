@@ -6,6 +6,7 @@ Tout est installé sous C:\\AGOA (une sous-dossier par programme).
 """
 import fnmatch
 import json
+import math
 import os
 import re
 import shutil
@@ -27,7 +28,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.4.3"
+LAUNCHER_VERSION = "0.4.4"
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
 # --- Dossier unique d'installation ---------------------------------------
@@ -491,6 +492,47 @@ def round_rect(cv, x0, y0, x1, y1, r, **kw):
         cv.create_oval(cx, cy, cx + 2 * r, cy + 2 * r, width=0, **kw)
 
 
+class ProgressBar(tk.Canvas):
+    """Barre d'avancement animée : remplissage lissé + reflet qui glisse (activité visible même sans pourcentage)."""
+
+    def __init__(self, master, S, **kw):
+        super().__init__(master, height=int(30 * S), bg="#E8E6DF", highlightthickness=1, highlightbackground=INK, **kw)
+        self.S = S
+        self.target = None      # None = indéterminé
+        self.shown = 0.0
+        self.label = "Préparation…"
+        self.phase = 0.0
+
+    def set(self, value, label=None):
+        self.target = value
+        if label:
+            self.label = label
+
+    def step(self):
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 4:
+            return
+        goal = 0.0 if self.target is None else self.target
+        self.shown += (goal - self.shown) * 0.18
+        self.phase = (self.phase + 0.022) % 1.0
+        self.delete("all")
+        fw = int(w * self.shown) if self.target is not None else int(w * 0.12)
+        if self.target is None:                      # indéterminé : bloc qui va et vient
+            x = int((w - fw) * (0.5 - 0.5 * math.cos(self.phase * 2 * math.pi)))
+            self.create_rectangle(x, 0, x + fw, h, fill=RED, width=0)
+        else:
+            self.create_rectangle(0, 0, fw, h, fill=RED, width=0)
+            sw = max(int(w * 0.18), 24)              # reflet qui traverse la partie remplie
+            sx = int((fw + sw) * self.phase) - sw
+            for i in range(sw):
+                a, b = max(sx + i, 0), min(sx + i + 1, fw)
+                if a < b:
+                    t = 1 - abs(i - sw / 2) / (sw / 2)
+                    self.create_rectangle(a, 0, b, h, fill="#%02X%02X%02X" % (int(179 + 60 * t), int(38 + 90 * t), int(30 + 90 * t)), width=0)
+        txt = self.label if self.target is None else f"{self.label} {int(self.target * 100)} %"
+        self.create_text(w // 2, h // 2, text=txt.upper(), font=MONO_B, fill=INK if self.shown < 0.5 else "white")
+
+
 class Splash(tk.Toplevel):
     """Écran de démarrage (même présentation que les autres applications AGOA)."""
 
@@ -565,12 +607,17 @@ class AgoaLauncher(tk.Tk):
         self.query = tk.StringVar()
         self.query.trace_add("write", lambda *a: self.render())
         self.busy = {}
+        self.bars = {}          # id -> ProgressBar
+        self.cards = {}         # id -> (signature, frame) : on ne reconstruit que ce qui change
+        self.checking = False
+        self.banner_sig = None
         self.catalog_error = None
         try:
             self.iconbitmap(resource_path("icon.ico"))
         except Exception:
             pass
         self.build_chrome()
+        self.after(100, self.animate)
         self.withdraw()                       # la fenêtre principale attend la fin du démarrage
         self.t0 = time.time()
         self.splash = Splash(self, self.S, LAUNCHER_VERSION)
@@ -706,15 +753,20 @@ class AgoaLauncher(tk.Tk):
         for a in self.catalog.get("apps", []):
             try:
                 self.releases[a["id"]] = gh_latest_release(a["repo"], tok)
+                self.errors.pop(a["id"], None)
             except Exception as e:
                 self.releases[a["id"]] = None
                 self.errors[a["id"]] = str(e) if isinstance(e, RuntimeError) else net_reason(e)
             self.after(0, self.render)
+        self.checking = False
         self.after(0, self.render)
 
     def refresh(self):
         """Bouton ⟳ : revérifie le lanceur, le catalogue et les programmes."""
-        self.releases, self.errors = {}, {}
+        if self.checking:
+            return
+        self.checking = True            # les cartes gardent leur contenu pendant la vérification (pas de clignotement)
+        self.render()
 
         def work():
             try:
@@ -722,7 +774,6 @@ class AgoaLauncher(tk.Tk):
             except Exception:
                 pass
             self.catalog, self.catalog_error = self.store.load_catalog()
-            self.after(0, self.render)
             self.fetch_releases()
         threading.Thread(target=work, daemon=True).start()
 
@@ -754,18 +805,22 @@ class AgoaLauncher(tk.Tk):
             on = k == self.filter
             lab.config(text=f"{names[k]} {c[k]}", bg=INK if on else BG, fg="white" if on else MUTED)
 
-        for w in self.banner_host.winfo_children():
-            w.destroy()
         lr = self.launcher_rel
+        banners = []
         if lr and vtuple(lr["version"]) > vtuple(LAUNCHER_VERSION):
-            self.banner(f"AGOA Launcher {lr['version']} est disponible.", "Mettre à jour et redémarrer", self.do_update_launcher)
+            banners.append((f"AGOA Launcher {lr['version']} est disponible.", "Mettre à jour et redémarrer", self.do_update_launcher))
         if self.catalog_error:
-            self.banner(self.catalog_error + " — liste affichée hors ligne.", "Réessayer", self.refresh)
+            banners.append((self.catalog_error + " — liste affichée hors ligne.", "Réessayer", self.refresh))
         if c["maj"]:
-            self.banner(f"{c['maj']} programme(s) AGOA ont une nouvelle version.", "Tout mettre à jour", self.update_all)
+            banners.append((f"{c['maj']} programme(s) AGOA ont une nouvelle version.", "Tout mettre à jour", self.update_all))
+        bsig = tuple((t, ac) for t, ac, _ in banners)
+        if bsig != self.banner_sig:                   # bandeaux reconstruits seulement s'ils changent
+            self.banner_sig = bsig
+            for w in self.banner_host.winfo_children():
+                w.destroy()
+            for t, ac, cmd in banners:
+                self.banner(t, ac, cmd)
 
-        for w in self.grid_frame.winfo_children():
-            w.destroy()
         q = self.query.get().strip().lower()
         apps = []
         for a in self.catalog.get("apps", []):
@@ -780,14 +835,35 @@ class AgoaLauncher(tk.Tk):
                 continue
             apps.append((a, s))
 
-        tk.Label(self.grid_frame, text="01 / PROGRAMMES AGOA", font=MONO, bg=BG, fg=MUTED).grid(
-            row=0, column=0, sticky="w", pady=(10, 8), columnspan=6)
+        if not hasattr(self, "grid_title"):
+            self.grid_title = tk.Label(self.grid_frame, font=MONO, bg=BG, fg=MUTED)
+            self.grid_title.grid(row=0, column=0, sticky="w", pady=(10, 8), columnspan=6)
+        self.grid_title.config(text="01 / PROGRAMMES AGOA" + ("   ·   ACTUALISATION…" if self.checking else ""))
         width = max(self.canvas.winfo_width(), 900)
         cols = max(1, width // int(330 * self.S))
         for i in range(cols):
             self.grid_frame.columnconfigure(i, weight=1, uniform="c")
+
+        wanted = {a["id"] for a, _ in apps}
+        for k in list(self.cards):                     # cartes qui ne sont plus affichées
+            if k not in wanted:
+                self.cards.pop(k)[1].destroy()
+                self.bars.pop(k, None)
         for idx, (a, s) in enumerate(apps):
-            self.card(a, s, idx).grid(row=1 + idx // cols, column=idx % cols, sticky="nsew")
+            rel = self.releases.get(a["id"])
+            sig = (idx, s, rel["version"] if rel else None, rel["date"] if rel else None, self.errors.get(a["id"]),
+                   self.store.installed_version(a["id"], a), a["id"] in self.busy)
+            old = self.cards.get(a["id"])
+            if old is None or old[0] != sig:
+                if old:
+                    old[1].destroy()
+                    self.bars.pop(a["id"], None)
+                self.cards[a["id"]] = (sig, self.card(a, s, idx))
+            f = self.cards[a["id"]][1]
+            pos = dict(row=1 + idx // cols, column=idx % cols)
+            gi = f.grid_info()
+            if not gi or int(gi.get("row", -1)) != pos["row"] or int(gi.get("column", -1)) != pos["column"]:
+                f.grid(sticky="nsew", **pos)
         self.foot.config(text=f"Versions lues sur GitHub (dernière release de chaque dépôt) · installation dans {ROOT} · "
                               f"Launcher v{LAUNCHER_VERSION}")
 
@@ -855,7 +931,10 @@ class AgoaLauncher(tk.Tk):
         row = tk.Frame(f, bg=CARD)
         row.pack(fill="x")
         if a["id"] in self.busy:
-            ttk.Progressbar(row, maximum=1.0, value=self.busy[a["id"]]).pack(fill="x", ipady=6)
+            pb = ProgressBar(row, self.S)
+            pb.pack(fill="x")
+            pb.set(self.busy[a["id"]], "Téléchargement")
+            self.bars[a["id"]] = pb
         else:
             if s == "absent":
                 Flat(row, "Installer", lambda: self.do_install(a), True, pady=8).pack(side="left", fill="x", expand=True)
@@ -917,6 +996,20 @@ class AgoaLauncher(tk.Tk):
 
     def set_progress(self, app_id, p):
         self.busy[app_id] = p
+        pb = self.bars.get(app_id)
+        if pb:
+            if p >= 0.95:
+                pb.set(None, "Installation")       # téléchargement fini : l'installeur travaille, animation continue
+            else:
+                pb.set(p, "Téléchargement")
+
+    def animate(self):
+        for pb in list(self.bars.values()):
+            try:
+                pb.step()
+            except tk.TclError:
+                pass
+        self.after(33, self.animate)
 
     def done(self, a, err):
         self.busy.pop(a["id"], None)
