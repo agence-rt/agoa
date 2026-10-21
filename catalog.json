@@ -49,6 +49,15 @@
       "repo": "agence-rt/agoa-todo",
       "asset": "*Setup*.exe",
       "exe": "AGOA TD.exe"
+    },
+    {
+      "id": "ope",
+      "code": "OPE",
+      "nom": "AGOA OPE",
+      "description": "Immeubles, opérations et propositions d'honoraires : consultation, avancement des phases et création dans Ragic",
+      "repo": "agence-rt/ope",
+      "asset": "AGOA-OPE-Setup-*.exe",
+      "exe": "AGOA OPE.exe"
     }
   ]
 }
