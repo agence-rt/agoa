@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - "agoa_launcher.py"
+      - "agoa_connections.py"
       - "installer.nsi"
       - "icon.ico"
       - ".github/workflows/release.yml"
@@ -34,11 +35,24 @@ jobs:
       - uses: actions/setup-python@v5
         if: steps.v.outputs.skip == 'false'
         with: { python-version: "3.12" }
+      - name: Identifiants Google (connexion du launcher)
+        if: steps.v.outputs.skip == 'false'
+        shell: pwsh
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        run: |
+          if (-not $env:GOOGLE_CLIENT_ID -or -not $env:GOOGLE_CLIENT_SECRET) {
+            Write-Warning "Secrets GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET absents : le launcher sera construit SANS connexion Google."
+            '{"clientId":"","clientSecret":""}' | Set-Content -Encoding utf8 google_client.json
+          } else {
+            @{ clientId = $env:GOOGLE_CLIENT_ID; clientSecret = $env:GOOGLE_CLIENT_SECRET } | ConvertTo-Json | Set-Content -Encoding utf8 google_client.json
+          }
       - name: Compilation du programme
         if: steps.v.outputs.skip == 'false'
         run: |
           pip install pyinstaller
-          pyinstaller --noconsole --onefile --icon icon.ico --add-data "catalog.json;." --add-data "icon.ico;." --name AGOA-Launcher agoa_launcher.py
+          pyinstaller --noconsole --onefile --icon icon.ico --add-data "catalog.json;." --add-data "icon.ico;." --add-data "google_client.json;." --name AGOA-Launcher agoa_launcher.py
       - name: Fabrication de l'installateur
         if: steps.v.outputs.skip == 'false'
         shell: pwsh

@@ -24,11 +24,13 @@ import ctypes
 import glob
 import time
 from ctypes import wintypes
+import webbrowser
+import agoa_connections as conn
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.4.4"
+LAUNCHER_VERSION = "0.5.0"
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
 # --- Dossier unique d'installation ---------------------------------------
@@ -43,6 +45,7 @@ CONFIG_DIR = os.path.join(ROOT, "_launcher")
 STATE_FILE = os.path.join(CONFIG_DIR, "state.json")
 SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
 CATALOG_CACHE = os.path.join(CONFIG_DIR, "catalog.cache.json")
+CONN_FILE = os.path.join(ROOT, "_connexions", "connexions.dat")   # connexions partagées (chiffré DPAPI)
 INSTALL_DIR = os.path.join(ROOT, "Launcher")           # C:\\AGOA\\Launcher\\AGOA-Launcher.exe
 SETUP_PATTERN = "AGOA-Launcher-Setup-*.exe"
 
@@ -166,7 +169,7 @@ def _is_ssl_error(e):
     return isinstance(e, ssl.SSLError) or isinstance(getattr(e, "reason", None), ssl.SSLError)
 
 
-def _curl_open(url, headers, timeout):
+def _curl_open(url, headers, timeout, data=None):
     """Repli TLS : curl.exe (inclus dans Windows 10/11) utilise le magasin de certificats de Windows,
     comme le navigateur, ce qui fonctionne derrière un antivirus ou un pare-feu qui inspecte HTTPS."""
     exe = shutil.which("curl.exe") or shutil.which("curl")
@@ -180,10 +183,13 @@ def _curl_open(url, headers, timeout):
     for k, v in headers.items():
         if k != "User-Agent":
             cmd += ["-H", f"{k}: {v}"]
+    if data is not None:
+        cmd += ["-X", "POST", "--data-binary", "@-"]
     cmd.append(url)
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, creationflags=flags, timeout=1900 if big else 60)
+        r = subprocess.run(cmd, capture_output=True, text=True, creationflags=flags, timeout=1900 if big else 60,
+                           input=data.decode("utf-8") if data is not None else None)
         if r.returncode != 0:
             raise OSError((r.stderr or "").strip() or f"curl a échoué ({r.returncode})")
         final, _, code = (r.stdout or "").rpartition("|")
@@ -199,28 +205,35 @@ def _curl_open(url, headers, timeout):
         raise
 
 
-def gh_open(url, token=None, accept="application/vnd.github+json", timeout=20):
+def gh_open(url, token=None, accept="application/vnd.github+json", timeout=20, extra=None, data=None):
     """Ouvre une URL GitHub : proxy du système, puis connexion directe, puis (si le certificat est refusé)
     curl.exe avec le magasin de certificats de Windows. Les erreurs HTTP sont remontées telles quelles."""
     headers = {"User-Agent": "AGOA-Launcher", "Accept": accept}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    headers.update(extra or {})
     last = None
     for op in (_opener, _opener_direct):
         try:
-            return op.open(urllib.request.Request(url, headers=headers), timeout=timeout)
+            return op.open(urllib.request.Request(url, headers=headers, data=data, method="POST" if data is not None else "GET"), timeout=timeout)
         except urllib.error.HTTPError:
             raise
         except Exception as e:  # réseau, DNS, TLS, délai…
             last = e
     if _is_ssl_error(last):
         try:
-            return _curl_open(url, headers, timeout)
+            return _curl_open(url, headers, timeout, data)
         except urllib.error.HTTPError:
             raise
         except Exception:
             pass
     raise last
+
+
+def http_call(url, headers=None, data=None, timeout=20):
+    """Requête HTTP(S) générique (GET, ou POST si data) avec les mêmes repli réseau que pour GitHub."""
+    with gh_open(url, None, accept=(headers or {}).get("Accept", "application/json"), timeout=timeout, extra=headers, data=data) as r:
+        return r.read()
 
 
 def net_reason(e):
@@ -323,6 +336,7 @@ def gh_download(asset, dest, token=None, progress=None):
 class Store:
     def __init__(self):
         self.settings = load_json(SETTINGS_FILE, {})
+        self.conn = conn.ConnectionStore(CONN_FILE)
         self.state = load_json(STATE_FILE, {})
 
     @property
@@ -439,7 +453,13 @@ class Store:
         path = self.exe_path(app)
         if not path:
             raise FileNotFoundError(f"{app['nom']} est introuvable dans {self.app_dir(app['id'])}")
-        if hasattr(os, "startfile"):
+        extra = self.conn.env()
+        if extra and os.name == "nt":       # les applications reçoivent les connexions partagées (clés Ragic, Claude, Google)
+            env = os.environ.copy()
+            env.update(extra)
+            subprocess.Popen([path], env=env, cwd=os.path.dirname(path), close_fds=True,
+                             creationflags=0x00000008 | 0x00000200)   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        elif hasattr(os, "startfile"):
             os.startfile(path)
         else:
             subprocess.Popen([path])
@@ -531,6 +551,197 @@ class ProgressBar(tk.Canvas):
                     self.create_rectangle(a, 0, b, h, fill="#%02X%02X%02X" % (int(179 + 60 * t), int(38 + 90 * t), int(30 + 90 * t)), width=0)
         txt = self.label if self.target is None else f"{self.label} {int(self.target * 100)} %"
         self.create_text(w // 2, h // 2, text=txt.upper(), font=MONO_B, fill=INK if self.shown < 0.5 else "white")
+
+
+class ConnectionsWindow(tk.Toplevel):
+    """Écran « Connexions » : Ragic, Google et Claude, saisis une seule fois pour toutes les applications AGOA."""
+
+    def __init__(self, app):
+        super().__init__(app, bg=BG)
+        self.app, self.store, self.S = app, app.store.conn, app.S
+        self.title("AGOA · Connexions")
+        try:
+            self.iconbitmap(resource_path("icon.ico"))
+        except Exception:
+            pass
+        w, h = int(600 * self.S), int(720 * self.S)
+        self.geometry(f"{w}x{h}+{app.winfo_rootx() + 60}+{app.winfo_rooty() + 40}")
+        self.minsize(int(520 * self.S), int(560 * self.S))
+        self.transient(app)
+        self.editing, self.working, self.cancel = set(), False, False
+        self.vars = {"ragic": tk.StringVar(), "anthropic": tk.StringVar()}
+        self.protocol("WM_DELETE_WINDOW", self.close)
+        top = tk.Frame(self, bg=BG)
+        top.pack(fill="x", padx=16, pady=(14, 2))
+        tk.Label(top, text="CONNEXIONS", font=MONO_B, bg=INK, fg="white", padx=8, pady=3).pack(side="left")
+        tk.Label(self, text="Saisies une seule fois ici, ensuite utilisées par toutes les applications AGOA. "
+                            "Les clés sont chiffrées pour votre session Windows.",
+                 font=("Segoe UI", 9), bg=BG, fg=MUTED, wraplength=int(540 * self.S), justify="left").pack(anchor="w", padx=16, pady=(4, 8))
+        self.body = tk.Frame(self, bg=BG)
+        self.body.pack(fill="both", expand=True, padx=16)
+        self.msg = tk.Label(self, text="", font=("Segoe UI", 9), bg=BG, anchor="w", justify="left", wraplength=int(540 * self.S))
+        self.msg.pack(fill="x", padx=16, pady=(4, 12))
+        self.build()
+
+    # -- utilitaires
+    def close(self):
+        self.cancel = True
+        self.destroy()
+
+    def say(self, text, ok=None):
+        try:
+            self.msg.config(text=text, fg=GREEN_FG if ok else RED if ok is False else MUTED)
+        except tk.TclError:
+            pass
+
+    def section(self, num, title, desc, ok):
+        f = tk.Frame(self.body, bg=CARD, highlightbackground=LINE, highlightthickness=1, padx=16, pady=12)
+        f.pack(fill="x", pady=(0, 10))
+        head = tk.Frame(f, bg=CARD)
+        head.pack(fill="x")
+        tk.Label(head, text=num, font=MONO_B, bg=RED, fg="white", padx=6, pady=2).pack(side="left")
+        tk.Label(head, text=title, font=("Segoe UI", 12, "bold"), bg=CARD, fg=INK).pack(side="left", padx=8)
+        bg, fg = (GREEN_BG, GREEN_FG) if ok else (GREY_BG, GREY_FG)
+        tk.Label(head, text="CONNECTÉ" if ok else "NON CONFIGURÉ", font=MONO, bg=bg, fg=fg, padx=5, pady=2,
+                 highlightthickness=1, highlightbackground=fg).pack(side="right")
+        tk.Label(f, text=desc, font=("Segoe UI", 9), bg=CARD, fg="#444", wraplength=int(500 * self.S), justify="left",
+                 anchor="w").pack(anchor="w", pady=(6, 8))
+        return f
+
+    def key_row(self, f, kind, label):
+        row = tk.Frame(f, bg=CARD)
+        row.pack(fill="x")
+        e = tk.Entry(row, textvariable=self.vars[kind], show="•", font=("Segoe UI", 10), relief="solid", bd=1, bg="#F7F6F2")
+        e.pack(side="left", fill="x", expand=True, ipady=5)
+        Flat(row, "Valider", lambda: self.save_key(kind), True, padx=14, pady=6).pack(side="left", padx=(8, 0))
+        if kind in self.editing:
+            Flat(row, "Annuler", lambda: self.stop_edit(kind), False, padx=10, pady=6).pack(side="left", padx=(6, 0))
+        tk.Label(f, text=label, font=MONO, bg=CARD, fg=MUTED).pack(anchor="w", pady=(4, 0))
+
+    def saved_row(self, f, kind, detail):
+        tk.Label(f, text=detail, font=("Segoe UI", 9), bg=CARD, fg=INK, anchor="w").pack(anchor="w", pady=(0, 8))
+        row = tk.Frame(f, bg=CARD)
+        row.pack(fill="x")
+        Flat(row, "Remplacer", lambda: self.start_edit(kind), False, padx=12, pady=6).pack(side="left")
+        Flat(row, "Supprimer", lambda: self.remove(kind), False, padx=12, pady=6).pack(side="left", padx=(6, 0))
+
+    def start_edit(self, kind):
+        self.editing.add(kind)
+        self.build()
+
+    def stop_edit(self, kind):
+        self.editing.discard(kind)
+        self.vars[kind].set("")
+        self.build()
+
+    # -- construction
+    def build(self):
+        for w in self.body.winfo_children():
+            w.destroy()
+        r, g, a = self.store.get("ragic"), self.store.get("google"), self.store.get("anthropic")
+
+        f = self.section("01", "RAGIC", "Clé API de l'agence (Ragic > Compte > API). Le serveur est détecté automatiquement.", bool(r))
+        if r and "ragic" not in self.editing:
+            self.saved_row(f, "ragic", f"Serveur {r.get('host', '?')} · base « {r.get('apname', conn.RAGIC_APNAME)} »")
+        else:
+            self.key_row(f, "ragic", "CLÉ API RAGIC")
+
+        f = self.section("02", "GOOGLE", f"Compte Google de l'agence (@{conn.ALLOWED_DOMAIN}) : identification et envoi de courriels (Gmail).", bool(g))
+        if g:
+            self.saved_row_google(f, g)
+        else:
+            row = tk.Frame(f, bg=CARD)
+            row.pack(fill="x")
+            Flat(row, "Se connecter avec Google", self.google_in, True, padx=14, pady=8).pack(side="left")
+            if self.client is None:
+                tk.Label(f, text="Cette version ne contient pas les identifiants Google de l'application "
+                                 "(secrets GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET du dépôt GitHub).",
+                         font=("Segoe UI", 8), bg=CARD, fg=ORANGE_FG, wraplength=int(500 * self.S), justify="left").pack(anchor="w", pady=(6, 0))
+
+        f = self.section("03", "CLAUDE", "Clé API Anthropic (console.anthropic.com > API keys), pour les fonctions d'IA des applications.", bool(a))
+        if a and "anthropic" not in self.editing:
+            k = a.get("key", "")
+            self.saved_row(f, "anthropic", f"Clé {k[:7]}…{k[-4:]}")
+        else:
+            self.key_row(f, "anthropic", "CLÉ API CLAUDE (sk-ant-…)")
+
+    @property
+    def client(self):
+        return conn.google_client([resource_path("google_client.json"), os.path.join(base_dir(), "google_client.json")])
+
+    def saved_row_google(self, f, g):
+        tk.Label(f, text=f"{g.get('name', '')} · {g.get('email', '')}", font=("Segoe UI", 9), bg=CARD, fg=INK, anchor="w").pack(anchor="w", pady=(0, 8))
+        row = tk.Frame(f, bg=CARD)
+        row.pack(fill="x")
+        Flat(row, "Changer de compte", self.google_in, False, padx=12, pady=6).pack(side="left")
+        Flat(row, "Se déconnecter", lambda: self.remove("google"), False, padx=12, pady=6).pack(side="left", padx=(6, 0))
+
+    # -- actions (réseau dans un thread, retour dans l'interface)
+    def run(self, label, work, done):
+        if self.working:
+            return
+        self.working = True
+        self.say(label)
+
+        def thread():
+            try:
+                res, err = work(), None
+            except conn.ConnError as e:
+                res, err = None, str(e)
+            except Exception as e:
+                res, err = None, net_reason(e)
+            self.after(0, lambda: self.finish(res, err, done))
+        threading.Thread(target=thread, daemon=True).start()
+
+    def finish(self, res, err, done):
+        self.working = False
+        try:
+            if err:
+                self.say(err, False)
+                return
+            done(res)
+            self.build()
+            self.app.after(0, self.app.render)
+        except tk.TclError:
+            pass
+
+    def save_key(self, kind):
+        key = conn.clean_key(kind, self.vars[kind].get())
+        if not key:
+            self.say("Saisissez la clé.", False)
+            return
+        if kind == "ragic":
+            self.run("Vérification de la clé Ragic…", lambda: conn.check_ragic(key, http_call),
+                     lambda host: (self.store.set("ragic", {"key": key, "host": host, "apname": conn.RAGIC_APNAME}),
+                                   self.after_save("ragic", f"Ragic connecté (serveur {host}).")))
+        else:
+            self.run("Vérification de la clé Claude…", lambda: conn.check_anthropic(key, http_call),
+                     lambda _: (self.store.set("anthropic", {"key": key}), self.after_save("anthropic", "Clé Claude enregistrée.")))
+
+    def after_save(self, kind, text):
+        self.vars[kind].set("")
+        self.editing.discard(kind)
+        self.say(text, True)
+
+    def google_in(self):
+        client = self.client
+        if not client:
+            self.say("Identifiants Google absents de cette version du launcher.", False)
+            return
+        self.cancel = False
+        self.run("Connexion Google : terminez dans votre navigateur…",
+                 lambda: conn.google_sign_in(client, http_call, webbrowser.open, cancel=lambda: self.cancel),
+                 lambda g: (self.store.set("google", g), self.say(f"Google connecté : {g['email']}.", True)))
+
+    def remove(self, kind):
+        old = self.store.get(kind)
+        self.store.remove(kind)
+        self.editing.discard(kind)
+        if kind == "google" and old:
+            threading.Thread(target=conn.google_revoke, args=(old.get("refresh_token", ""), http_call), daemon=True).start()
+        self.say("Connexion supprimée.", True)
+        self.build()
+        self.app.render()
 
 
 class Splash(tk.Toplevel):
@@ -636,6 +847,10 @@ class AgoaLauncher(tk.Tk):
         tk.Label(top, text="AGOA", font=("Segoe UI", 15, "bold"), bg=BG, fg=INK).pack(side="left")
         tk.Label(top, text="LAUNCHER", font=MONO_B, bg=INK, fg="white", padx=8, pady=3).pack(side="left", padx=(16, 6))
         tk.Label(top, text=f"SUITE D'APPLICATIONS AGENCE · {ROOT}", font=MONO, bg=BG, fg=MUTED).pack(side="left", padx=8)
+        cx = tk.Label(top, text="CONNEXIONS", font=MONO_B, bg=BG, fg=INK, cursor="hand2", padx=8, pady=3,
+                      highlightthickness=1, highlightbackground=INK)
+        cx.pack(side="right", padx=(0, 6))
+        cx.bind("<Button-1>", lambda e: self.open_connections())
         gear = tk.Label(top, text="⚙", font=("Segoe UI", 14), bg=BG, fg=INK, cursor="hand2")
         gear.pack(side="right", padx=10)
         gear.bind("<Button-1>", self.settings_menu)
@@ -963,10 +1178,21 @@ class AgoaLauncher(tk.Tk):
 
     def settings_menu(self, event):
         m = tk.Menu(self, tearoff=0)
+        m.add_command(label="Connexions (Ragic, Google, Claude)…", command=self.open_connections)
         m.add_command(label="Ouvrir le dossier C:\\AGOA", command=lambda: os.startfile(ROOT))
         m.add_command(label="Jeton GitHub (dépôts privés)…", command=self.ask_token)
         m.add_command(label="Actualiser", command=self.refresh)
         m.tk_popup(event.x_root, event.y_root)
+
+    def open_connections(self):
+        w = getattr(self, "conn_win", None)
+        try:
+            if w and w.winfo_exists():
+                w.lift()
+                return
+        except tk.TclError:
+            pass
+        self.conn_win = ConnectionsWindow(self)
 
     def ask_token(self):
         t = simpledialog.askstring(APP_NAME, "Jeton d'accès GitHub (lecture des releases).\n"
