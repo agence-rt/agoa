@@ -30,7 +30,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.5.2"
+LAUNCHER_VERSION = "0.5.3"
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
 # --- Dossier unique d'installation ---------------------------------------
@@ -236,24 +236,24 @@ def http_call(url, headers=None, data=None, timeout=20):
         return r.read()
 
 
-def net_reason(e):
+def net_reason(e, what="GitHub"):
     """Cause lisible d'un échec réseau (court, affichable sur la carte)."""
     r = getattr(e, "reason", e)
     if isinstance(e, urllib.error.HTTPError):
         if e.code == 407:
             return "Proxy : authentification requise"
         if e.code in (401, 403):
-            return "Accès refusé par GitHub (limite ou filtrage)"
-        return f"GitHub a répondu {e.code}"
+            return f"Accès refusé par {what} (limite ou filtrage)"
+        return f"{what} a répondu {e.code}"
     if isinstance(r, ssl.SSLError):
         return "Certificat refusé (pare-feu / antivirus qui filtre HTTPS)"
     if isinstance(r, socket.gaierror):
-        return "DNS : github.com introuvable (réseau filtré ?)"
+        return f"DNS : {what} introuvable (réseau filtré ?)"
     if isinstance(r, (socket.timeout, TimeoutError)):
-        return "Délai dépassé : GitHub ne répond pas"
+        return f"Délai dépassé : {what} ne répond pas"
     if isinstance(r, (ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError)):
         return "Connexion bloquée (pare-feu / proxy)"
-    return "GitHub injoignable : " + (str(r)[:70] or type(r).__name__)
+    return f"{what} injoignable : " + (str(r)[:70] or type(r).__name__)
 
 
 def gh_latest_release_web(repo):
@@ -571,9 +571,10 @@ class ConnectionsWindow(tk.Toplevel):
             self.iconbitmap(resource_path("icon.ico"))
         except Exception:
             pass
-        w, h = int(600 * self.S), int(720 * self.S)
-        self.geometry(f"{w}x{h}+{app.winfo_rootx() + 60}+{app.winfo_rooty() + 40}")
-        self.minsize(int(520 * self.S), int(560 * self.S))
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        w, h = min(int(600 * self.S), sw - 40), min(int(740 * self.S), sh - 100)
+        self.geometry(f"{w}x{h}+{max((sw - w) // 2, 0)}+{max((sh - h) // 3, 0)}")
+        self.minsize(min(int(480 * self.S), w), min(int(420 * self.S), h))
         self.transient(app)
         self.editing, self.working, self.cancel = set(), False, False
         self.vars = {"ragic": tk.StringVar(), "anthropic": tk.StringVar()}
@@ -584,10 +585,10 @@ class ConnectionsWindow(tk.Toplevel):
         tk.Label(self, text="Saisies une seule fois ici, ensuite utilisées par toutes les applications AGOA. "
                             "Les clés sont chiffrées pour votre session Windows.",
                  font=("Segoe UI", 9), bg=BG, fg=MUTED, wraplength=int(540 * self.S), justify="left").pack(anchor="w", padx=16, pady=(4, 8))
+        self.msg = tk.Label(self, text="", font=("Segoe UI", 10, "bold"), bg=BG, anchor="w", justify="left", wraplength=int(540 * self.S))
+        self.msg.pack(fill="x", padx=16, pady=(0, 6))          # message en haut : toujours visible, même sur petit écran
         self.body = tk.Frame(self, bg=BG)
         self.body.pack(fill="both", expand=True, padx=16)
-        self.msg = tk.Label(self, text="", font=("Segoe UI", 9), bg=BG, anchor="w", justify="left", wraplength=int(540 * self.S))
-        self.msg.pack(fill="x", padx=16, pady=(4, 12))
         self.build()
 
     # -- utilitaires
@@ -696,8 +697,14 @@ class ConnectionsWindow(tk.Toplevel):
             except conn.ConnError as e:
                 res, err = None, str(e)
             except Exception as e:
-                res, err = None, net_reason(e)
-            self.after(0, lambda: self.finish(res, err, done))
+                try:
+                    res, err = None, net_reason(e, "le service")
+                except Exception:
+                    res, err = None, "Échec de la vérification : " + repr(e)[:120]
+            try:
+                self.after(0, lambda: self.finish(res, err, done))
+            except Exception:
+                self.working = False
         threading.Thread(target=thread, daemon=True).start()
 
     def finish(self, res, err, done):
@@ -711,11 +718,16 @@ class ConnectionsWindow(tk.Toplevel):
             self.app.after(0, self.app.render)
         except tk.TclError:
             pass
+        except Exception as e:
+            self.say("Erreur : " + str(e)[:150], False)
 
     def save_key(self, kind):
         key = conn.clean_key(kind, self.vars[kind].get())
+        if self.working:
+            self.say("Une vérification est déjà en cours…")
+            return
         if not key:
-            self.say("Saisissez la clé.", False)
+            self.say("Saisissez la clé avant de valider.", False)
             return
         if kind == "ragic":
             self.run("Vérification de la clé Ragic…", lambda: conn.check_ragic(key, http_call),
