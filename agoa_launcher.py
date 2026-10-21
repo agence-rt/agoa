@@ -30,7 +30,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.5.1"
+LAUNCHER_VERSION = "0.5.2"
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
 # --- Dossier unique d'installation ---------------------------------------
@@ -457,6 +457,7 @@ class Store:
         if extra and os.name == "nt":       # les applications reçoivent les connexions partagées (clés Ragic, Claude, Google)
             env = os.environ.copy()
             env.update(extra)
+            env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
             subprocess.Popen([path], env=env, cwd=os.path.dirname(path), close_fds=True,
                              creationflags=0x00000008 | 0x00000200)   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
         elif hasattr(os, "startfile"):
@@ -478,18 +479,24 @@ class Store:
             setup = os.path.join(CONFIG_DIR, asset["name"])
             gh_download(asset, setup, self.token, progress)
             target = os.path.join(INSTALL_DIR, "AGOA-Launcher.exe")
-            lines = ["@echo off", "timeout /t 3 /nobreak >nul", f'start /wait "" "{setup}" /S',
+            # PYINSTALLER_RESET_ENVIRONMENT : sans cela, la nouvelle version relancée depuis ce processus réutilise le dossier
+            # temporaire de l'ancienne (supprimé à sa fermeture) -> « Failed to load Python DLL ».
+            lines = ["@echo off", "set PYINSTALLER_RESET_ENVIRONMENT=1", "timeout /t 3 /nobreak >nul", f'start /wait "" "{setup}" /S',
                      f'del "{setup}"', f'start "" "{target}"', 'del "%~f0"']
         else:  # ancien mode : remplacement de l'exe seul
             asset = pick_asset(rel, "AGOA-Launcher.exe")
             exe = sys.executable
             new = exe + ".new"
             gh_download(asset, new, self.token, progress)
-            lines = ["@echo off", "timeout /t 3 /nobreak >nul", f'move /Y "{new}" "{exe}"',
+            lines = ["@echo off", "set PYINSTALLER_RESET_ENVIRONMENT=1", "timeout /t 3 /nobreak >nul", f'move /Y "{new}" "{exe}"',
                      f'start "" "{exe}"', 'del "%~f0"']
         with open(bat, "w", encoding="utf-8") as f:
             f.write("\r\n".join(lines) + "\r\n")
-        subprocess.Popen(["cmd", "/c", bat], creationflags=0x08000000)
+        env = os.environ.copy()
+        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+        for k in [k for k in env if k.startswith("_PYI") or k == "_MEIPASS2"]:
+            env.pop(k)
+        subprocess.Popen(["cmd", "/c", bat], creationflags=0x08000000, env=env)
 
 
 class Flat(tk.Label):
