@@ -30,7 +30,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.5.3"
+LAUNCHER_VERSION = "0.5.4"
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
 # --- Dossier unique d'installation ---------------------------------------
@@ -654,7 +654,7 @@ class ConnectionsWindow(tk.Toplevel):
         else:
             self.key_row(f, "ragic", "CLÉ API RAGIC")
 
-        f = self.section("02", "GOOGLE", f"Compte Google de l'agence (@{conn.ALLOWED_DOMAIN}) : identification et envoi de courriels (Gmail).", bool(g))
+        f = self.section("02", "GOOGLE", f"Compte Google de l'agence (@{conn.ALLOWED_DOMAIN}) : identification, envoi de courriels (Gmail) et lecture de l'agenda.", bool(g))
         if g:
             self.saved_row_google(f, g)
         else:
@@ -679,6 +679,10 @@ class ConnectionsWindow(tk.Toplevel):
 
     def saved_row_google(self, f, g):
         tk.Label(f, text=f"{g.get('name', '')} · {g.get('email', '')}", font=("Segoe UI", 9), bg=CARD, fg=INK, anchor="w").pack(anchor="w", pady=(0, 8))
+        if "calendar.readonly" not in str(g.get("scopes", "")):
+            tk.Label(f, text="Autorisation Google Agenda manquante (utile à AGOA DTG) : cliquez sur « Changer de compte » "
+                             "et acceptez toutes les autorisations demandées.", font=("Segoe UI", 8), bg=CARD, fg=ORANGE_FG,
+                     wraplength=int(500 * self.S), justify="left").pack(anchor="w", pady=(0, 8))
         row = tk.Frame(f, bg=CARD)
         row.pack(fill="x")
         Flat(row, "Changer de compte", self.google_in, False, padx=12, pady=6).pack(side="left")

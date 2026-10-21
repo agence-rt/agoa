@@ -16,7 +16,8 @@ import time
 import urllib.error
 import urllib.parse
 
-GOOGLE_SCOPES = ["openid", "email", "profile", "https://www.googleapis.com/auth/gmail.send"]
+GOOGLE_SCOPES = ["openid", "email", "profile", "https://www.googleapis.com/auth/gmail.send",
+                 "https://www.googleapis.com/auth/calendar.readonly"]   # Gmail (AGOA TD) et Agenda (AGOA DTG)
 ALLOWED_DOMAIN = "remithollet.fr"
 RAGIC_APNAME = "agoa"
 RAGIC_HOSTS = ["www.ragic.com", "eu2.ragic.com", "na3.ragic.com", "ap5.ragic.com"]
