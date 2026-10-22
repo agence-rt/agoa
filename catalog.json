@@ -43,8 +43,8 @@
     },
     {
       "id": "todo",
-      "code": "TD",
-      "nom": "AGOA TD",
+      "code": "TODO",
+      "nom": "AGOA TODO",
       "description": "To do list des dossiers par personne, synchronisée avec Ragic",
       "repo": "agence-rt/agoa-todo",
       "asset": "*Setup*.exe",
