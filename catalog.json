@@ -1,5 +1,5 @@
 {
-  "_aide": "Catalogue des programmes AGOA. 'repo' = dépôt GitHub. Version affichée = dernière Release. 'asset' = motif du fichier de la release (installateur *-Setup-*.exe ou .zip). 'exe' = programme installé dans C:\\AGOA\\<id>. Relu depuis le dépôt du lanceur : ajouter un programme = modifier ce fichier, sans recompiler.",
+  "_aide": "Catalogue des programmes AGOA. 'repo' = dépôt GitHub. Version affichée = dernière Release. 'asset' = motif du fichier de la release (installateur *-Setup-*.exe ou .zip). 'exe' = programme installé dans C:\\AGOA\\<id>. 'code' = nom court affiché après AGOA ; 'icone' (facultatif) = lettres de l'icône, par défaut le code. Relu depuis le dépôt du lanceur : ajouter un programme = modifier ce fichier, sans recompiler.",
   "launcher": {
     "repo": "agence-rt/agoa",
     "asset": "AGOA-Launcher.exe"
@@ -61,7 +61,8 @@
     },
     {
       "id": "data",
-      "code": "DA",
+      "code": "DATA",
+      "icone": "DA",
       "nom": "AGOA DATA",
       "description": "Volumétrie d'un bâtiment par nuage de points LiDAR HD : parcelle, coupes perpendiculaires aux voies, égout et faîtage",
       "repo": "agence-rt/data",

@@ -30,7 +30,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.5.5"
+LAUNCHER_VERSION = "0.5.6"
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
 # --- Dossier unique d'installation ---------------------------------------
@@ -1135,7 +1135,7 @@ class AgoaLauncher(tk.Tk):
 
         mid = tk.Frame(f, bg=CARD)
         mid.pack(fill="x", pady=(14, 10))
-        self.icon(mid, a["code"]).pack(side="left")
+        self.icon(mid, a.get("icone") or a["code"]).pack(side="left")      # « icone » (facultatif) : lettres de l'icône, sinon le code
         txt = tk.Frame(mid, bg=CARD)
         txt.pack(side="left", padx=12, fill="x", expand=True)
         title = tk.Frame(txt, bg=CARD)
