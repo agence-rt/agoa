@@ -64,7 +64,7 @@
       "code": "DATA",
       "icone": "DA",
       "nom": "AGOA DATA",
-      "description": "Volumétrie d'un bâtiment par nuage de points LiDAR HD : parcelle, coupes perpendiculaires aux voies, égout et faîtage",
+      "description": "Données d'une adresse : plans cadastraux A3 vectoriels, volumétrie par nuage de points LiDAR HD, fonds de plan DWG recalés sur le cadastre à partir de PDF",
       "repo": "agence-rt/data",
       "asset": "AGOA-DATA-Setup-*.exe",
       "exe": "AGOA DATA.exe"
