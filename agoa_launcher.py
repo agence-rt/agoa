@@ -30,7 +30,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.5.6"
+LAUNCHER_VERSION = "0.5.7"
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
 # --- Dossier unique d'installation ---------------------------------------
@@ -1077,10 +1077,15 @@ class AgoaLauncher(tk.Tk):
             self.grid_title = tk.Label(self.grid_frame, font=MONO, bg=BG, fg=MUTED)
             self.grid_title.grid(row=0, column=0, sticky="w", pady=(10, 8), columnspan=6)
         self.grid_title.config(text="01 / PROGRAMMES AGOA" + ("   ·   ACTUALISATION…" if self.checking else ""))
-        width = max(self.canvas.winfo_width(), 900)
+        width = self.canvas.winfo_width()
         cols = max(1, width // int(330 * self.S))
-        for i in range(cols):
-            self.grid_frame.columnconfigure(i, weight=1, uniform="c")
+        for i in range(12):                            # colonnes de taille identique ; les anciennes colonnes sont remises à zéro
+            if i < cols:
+                self.grid_frame.columnconfigure(i, weight=1, uniform="c")
+            else:
+                self.grid_frame.columnconfigure(i, weight=0, uniform="", minsize=0)
+        for r in range(1, 1 + max(1, -(-len(apps) // cols))):
+            self.grid_frame.rowconfigure(r, weight=0, uniform="r")    # lignes de hauteur identique
 
         wanted = {a["id"] for a, _ in apps}
         for k in list(self.cards):                     # cartes qui ne sont plus affichées
@@ -1167,7 +1172,7 @@ class AgoaLauncher(tk.Tk):
                  anchor="w").pack(anchor="w", pady=(10, 12), fill="x")
 
         row = tk.Frame(f, bg=CARD)
-        row.pack(fill="x")
+        row.pack(fill="x", side="bottom")            # boutons toujours calés en bas de la tuile
         if a["id"] in self.busy:
             pb = ProgressBar(row, self.S)
             pb.pack(fill="x")
