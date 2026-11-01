@@ -80,6 +80,17 @@
       "repo": "agence-rt/agoa-conges",
       "asset": "AGOA-CG-Setup-*.exe",
       "exe": "AGOA CG.exe"
+    },
+    {
+      "id": "compta",
+      "code": "COMPTA",
+      "icone": "CPT",
+      "onglet": "admin",
+      "nom": "AGOA COMPTA",
+      "description": "Comptabilité et déclarations de TVA mensuelles (ARCHI PRO) et trimestrielles (FAURIEL49) : relevés bancaires, justificatifs, exports Excel et PDF",
+      "repo": "agence-rt/K-COMPTA",
+      "asset": "AGOA-COMPTA-Setup-*.exe",
+      "exe": "AGOA COMPTA.exe"
     }
   ]
 }
