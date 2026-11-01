@@ -7,6 +7,7 @@ on:
     paths:
       - "agoa_launcher.py"
       - "agoa_connections.py"
+      - "agoa_admin.py"
       - "installer.nsi"
       - "icon.ico"
       - ".github/workflows/release.yml"

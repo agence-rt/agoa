@@ -26,11 +26,12 @@ import time
 from ctypes import wintypes
 import webbrowser
 import agoa_connections as conn
+import agoa_admin
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.5.8"
+LAUNCHER_VERSION = "0.5.9"
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
 # --- Dossier unique d'installation ---------------------------------------
@@ -838,6 +839,7 @@ class AgoaLauncher(tk.Tk):
         self.errors = {}        # id -> message
         self.launcher_rel = None
         self.filter = "all"
+        self.admin_ok = False   # onglet ADMIN déverrouillé (reverrouillé en quittant l'onglet)
         self.query = tk.StringVar()
         self.query.trace_add("write", lambda *a: self.render())
         self.busy = {}
@@ -888,7 +890,7 @@ class AgoaLauncher(tk.Tk):
         bar = tk.Frame(self, bg=BG)
         bar.pack(fill="x", padx=10, pady=(12, 4))
         self.tabs = {}
-        for key in ("all", "ok", "maj", "absent", "test"):
+        for key in ("all", "ok", "maj", "absent", "test", "admin"):
             lab = tk.Label(bar, font=MONO, padx=10, pady=6, cursor="hand2")
             lab.pack(side="left")
             lab.bind("<Button-1>", lambda e, k=key: self.set_filter(k))
@@ -1020,8 +1022,69 @@ class AgoaLauncher(tk.Tk):
         self.render()
 
     def set_filter(self, k):
+        if k == "admin" and not self.admin_ok and not self.admin_unlock():
+            return
+        if k != "admin":
+            self.admin_ok = False              # l'onglet ADMIN se reverrouille dès qu'on le quitte
         self.filter = k
         self.render()
+
+    # --- onglet ADMIN : code PIN -------------------------------------------
+    def admin_unlock(self):
+        """Demande le code (ou le crée au premier usage). Retourne True si l'accès est accordé."""
+        rec = self.store.settings.get("admin")
+        if not rec:
+            p1 = simpledialog.askstring(APP_NAME, f"Créer le code de l'onglet ADMIN (au moins {agoa_admin.MIN_LEN} caractères) :",
+                                        show="*", parent=self)
+            if p1 is None:
+                return False
+            if len(p1) < agoa_admin.MIN_LEN:
+                messagebox.showwarning(APP_NAME, f"Le code doit faire au moins {agoa_admin.MIN_LEN} caractères.", parent=self)
+                return False
+            if simpledialog.askstring(APP_NAME, "Confirmer le code :", show="*", parent=self) != p1:
+                messagebox.showwarning(APP_NAME, "Les deux codes ne correspondent pas.", parent=self)
+                return False
+            self.store.settings["admin"] = agoa_admin.make_record(p1)
+            save_json(SETTINGS_FILE, self.store.settings)
+            self.admin_ok = True
+            return True
+        wait = agoa_admin.locked_for(rec)
+        if wait:
+            messagebox.showwarning(APP_NAME, f"Trop d'essais. Réessayez dans {wait} s.", parent=self)
+            return False
+        pin = simpledialog.askstring(APP_NAME, "Code de l'onglet ADMIN :", show="*", parent=self)
+        if pin is None:
+            return False
+        if agoa_admin.check(rec, pin):
+            agoa_admin.register_ok(rec)
+            save_json(SETTINGS_FILE, self.store.settings)
+            self.admin_ok = True
+            return True
+        agoa_admin.register_fail(rec)
+        save_json(SETTINGS_FILE, self.store.settings)
+        messagebox.showerror(APP_NAME, "Code incorrect.", parent=self)
+        return False
+
+    def admin_change_pin(self):
+        rec = self.store.settings.get("admin")
+        if rec:
+            if agoa_admin.locked_for(rec):
+                return messagebox.showwarning(APP_NAME, f"Trop d'essais. Réessayez dans {agoa_admin.locked_for(rec)} s.", parent=self)
+            cur = simpledialog.askstring(APP_NAME, "Code ADMIN actuel :", show="*", parent=self)
+            if cur is None:
+                return
+            if not agoa_admin.check(rec, cur):
+                agoa_admin.register_fail(rec)
+                save_json(SETTINGS_FILE, self.store.settings)
+                return messagebox.showerror(APP_NAME, "Code incorrect.", parent=self)
+        p1 = simpledialog.askstring(APP_NAME, f"Nouveau code (au moins {agoa_admin.MIN_LEN} caractères) :", show="*", parent=self)
+        if p1 is None:
+            return
+        if len(p1) < agoa_admin.MIN_LEN or simpledialog.askstring(APP_NAME, "Confirmer le nouveau code :", show="*", parent=self) != p1:
+            return messagebox.showwarning(APP_NAME, "Code trop court ou confirmation différente : inchangé.", parent=self)
+        self.store.settings["admin"] = agoa_admin.make_record(p1)
+        save_json(SETTINGS_FILE, self.store.settings)
+        messagebox.showinfo(APP_NAME, "Code ADMIN modifié.", parent=self)
 
     def st(self, a):
         if a["id"] not in self.releases:
@@ -1029,26 +1092,26 @@ class AgoaLauncher(tk.Tk):
         return self.store.status(a, self.releases[a["id"]])
 
     @staticmethod
-    def is_test(a):
-        """Application pas encore fonctionnelle : catalogue « onglet »: « test » → affichée seulement dans APP TEST."""
-        return a.get("onglet") == "test"
+    def zone(a):
+        """Onglet d'une application : « onglet » du catalogue (« test » = pas encore fonctionnelle, « admin » = sensible)."""
+        return a.get("onglet") if a.get("onglet") in ("test", "admin") else "main"
 
     def counts(self):
         allapps = self.catalog.get("apps", [])
-        apps = [a for a in allapps if not self.is_test(a)]
+        apps = [a for a in allapps if self.zone(a) == "main"]
         st = [self.st(a) for a in apps]
         return {"all": len(apps), "ok": st.count("ok") + st.count("maj"), "maj": st.count("maj"), "absent": st.count("absent"),
-                "test": len(allapps) - len(apps)}
+                "test": sum(self.zone(a) == "test" for a in allapps), "admin": sum(self.zone(a) == "admin" for a in allapps)}
 
     # --- rendu -----------------------------------------------------------
     def render(self):
         if not hasattr(self, "grid_frame"):
             return
         c = self.counts()
-        names = {"all": "TOUTES", "ok": "INSTALLÉES", "maj": "MISES À JOUR", "absent": "NON INSTALLÉES", "test": "APP TEST"}
+        names = {"all": "TOUTES", "ok": "INSTALLÉES", "maj": "MISES À JOUR", "absent": "NON INSTALLÉES", "test": "APP TEST", "admin": "ADMIN"}
         for k, lab in self.tabs.items():
             on = k == self.filter
-            lab.config(text=f"{names[k]} {c[k]}", bg=INK if on else BG, fg="white" if on else MUTED)
+            lab.config(text=f"{names[k]} {c[k]}" if k != "admin" or self.admin_ok else "🔒 ADMIN", bg=INK if on else BG, fg="white" if on else MUTED)
 
         lr = self.launcher_rel
         banners = []
@@ -1070,7 +1133,9 @@ class AgoaLauncher(tk.Tk):
         apps = []
         for a in self.catalog.get("apps", []):
             s = self.st(a)
-            if self.is_test(a) != (self.filter == "test"):     # les apps de test n'apparaissent que dans APP TEST
+            if self.zone(a) != (self.filter if self.filter in ("test", "admin") else "main"):
+                continue                                         # APP TEST et ADMIN ont leurs propres applications
+            if self.zone(a) == "admin" and not self.admin_ok:    # sécurité : jamais d'application admin sans code
                 continue
             if self.filter == "ok" and s not in ("ok", "maj"):
                 continue
@@ -1218,6 +1283,7 @@ class AgoaLauncher(tk.Tk):
         m.add_command(label="Connexions (Ragic, Google, Claude)…", command=self.open_connections)
         m.add_command(label="Ouvrir le dossier C:\\AGOA", command=lambda: os.startfile(ROOT))
         m.add_command(label="Jeton GitHub (dépôts privés)…", command=self.ask_token)
+        m.add_command(label="Code de l'onglet ADMIN…", command=self.admin_change_pin)
         m.add_command(label="Actualiser", command=self.refresh)
         m.tk_popup(event.x_root, event.y_root)
 
@@ -1282,7 +1348,7 @@ class AgoaLauncher(tk.Tk):
 
     def update_all(self):
         for a in self.catalog.get("apps", []):
-            if self.st(a) == "maj" and not self.is_test(a):
+            if self.st(a) == "maj" and self.zone(a) == "main":
                 self.do_install(a)
 
     def do_update_launcher(self):
