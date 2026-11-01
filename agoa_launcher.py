@@ -31,7 +31,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.6.2"
+LAUNCHER_VERSION = "0.6.3"
+AUTO_CHECK_MS = 15 * 60 * 1000          # vérification automatique des mises à jour toutes les 15 minutes
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
 # --- Dossier unique d'installation ---------------------------------------
@@ -868,6 +869,7 @@ class AgoaLauncher(tk.Tk):
         self.releases = {}      # id -> release | None (inconnu) | "..." (en cours)
         self.errors = {}        # id -> message
         self.launcher_rel = None
+        self.updating_launcher = False
         self.filter = "all"
         self.admin_ok = False   # onglet ADMIN déverrouillé par code (reverrouillé en quittant l'onglet)
         self.query = tk.StringVar()
@@ -1017,6 +1019,38 @@ class AgoaLauncher(tk.Tk):
         self.lift()
         self.render()
         threading.Thread(target=self.fetch_releases, daemon=True).start()
+        self.after(AUTO_CHECK_MS, self.auto_check)
+
+    def auto_check(self):
+        """Toutes les 15 min : revérifie lanceur, catalogue et programmes (sans toucher à l'affichage tant que rien ne change)."""
+        self.after(AUTO_CHECK_MS, self.auto_check)
+        if self.checking or self.updating_launcher:
+            return
+        self.checking = True
+
+        def work():
+            try:
+                try:
+                    self.launcher_rel = gh_latest_release(LAUNCHER_REPO, self.store.token)
+                except Exception:
+                    pass
+                self.catalog, self.catalog_error = self.store.load_catalog()
+                self.fetch_releases()
+            finally:
+                self.checking = False
+                self.after(0, self.prompt_launcher_update)
+        threading.Thread(target=work, daemon=True).start()
+
+    def prompt_launcher_update(self):
+        lr = self.launcher_rel
+        if self.updating_launcher or not getattr(sys, "frozen", False) or not lr \
+                or vtuple(lr["version"]) <= vtuple(LAUNCHER_VERSION):
+            return
+        self.updating_launcher = True
+        messagebox.showinfo(APP_NAME, f"Une nouvelle version du launcher est disponible ({lr['version']}).\n\n"
+                                      "Pour continuer, le launcher doit être mis à jour : il va se fermer puis redémarrer "
+                                      "automatiquement. Vos applications ouvertes ne sont pas touchées.", parent=self)
+        self.do_update_launcher()
 
     def fetch_releases(self):
         tok = self.store.token
@@ -1357,12 +1391,18 @@ class AgoaLauncher(tk.Tk):
                 self.do_install(a)
 
     def do_update_launcher(self):
+        self.updating_launcher = True
+
+        def fail(e):
+            self.updating_launcher = False
+            messagebox.showerror(APP_NAME, str(e))
+
         def work():
             try:
                 self.store.update_launcher(self.launcher_rel)
                 self.after(0, self.destroy)
             except Exception as e:
-                self.after(0, lambda: messagebox.showerror(APP_NAME, str(e)))
+                self.after(0, lambda: fail(e))
         threading.Thread(target=work, daemon=True).start()
 
     def do_open(self, a):
