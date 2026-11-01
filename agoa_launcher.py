@@ -439,6 +439,36 @@ class Store:
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
+    def is_running(self, app):
+        """Vrai si le programme de l'application est en cours d'exécution (Windows)."""
+        if os.name != "nt":
+            return False
+        name = app.get("exe") or ""
+        if not name:
+            return False
+        try:
+            out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {name}", "/FO", "CSV", "/NH"], capture_output=True, text=True,
+                                 timeout=15, creationflags=0x08000000).stdout
+            return name.lower() in out.lower()
+        except Exception:
+            return False
+
+    def close_app(self, app, wait=12):
+        """Demande la fermeture normale (taskkill sans /F), puis force si le programme ne se ferme pas."""
+        name = app.get("exe") or ""
+        for force in (False, True):
+            try:
+                subprocess.run(["taskkill", "/IM", name] + (["/F", "/T"] if force else []), capture_output=True,
+                               timeout=30, creationflags=0x08000000)
+            except Exception:
+                pass
+            end = time.time() + (wait if not force else 5)
+            while time.time() < end:
+                if not self.is_running(app):
+                    return True
+                time.sleep(0.5)
+        return not self.is_running(app)
+
     def uninstall(self, app):
         d = self.app_dir(app["id"])
         for u in glob.glob(os.path.join(d, "Uninstall*.exe")):
@@ -1274,17 +1304,29 @@ class AgoaLauncher(tk.Tk):
         rel = self.releases.get(a["id"])
         if a["id"] in self.busy or not rel:
             return
+        if not self.confirm_close(a, "mise à jour"):
+            return
         self.busy[a["id"]] = 0.0
         self.render()
 
         def work():
             try:
+                self.store.close_app(a) if self.store.is_running(a) else None
                 self.store.install(a, rel, progress=lambda p: self.after(0, self.set_progress, a["id"], p))
                 err = None
             except Exception as e:
                 err = e
             self.after(0, self.done, a, err)
         threading.Thread(target=work, daemon=True).start()
+
+    def confirm_close(self, a, action):
+        """Si l'application est ouverte, demande l'autorisation de la fermer avant la mise à jour / désinstallation."""
+        if not self.store.is_running(a):
+            return True
+        return messagebox.askyesno(
+            APP_NAME, f"{a['nom']} est actuellement ouverte.\n\nElle doit être fermée pour la {action}.\n"
+                      "Enregistrez votre travail, puis cliquez sur Oui pour la fermer.\n\nFermer {0} maintenant ?".format(a['nom']),
+            icon="warning", parent=self)
 
     def set_progress(self, app_id, p):
         self.busy[app_id] = p
@@ -1330,7 +1372,9 @@ class AgoaLauncher(tk.Tk):
             messagebox.showerror(APP_NAME, str(e))
 
     def do_uninstall(self, a):
-        if messagebox.askyesno(APP_NAME, f"Désinstaller {a['nom']} ?"):
+        if messagebox.askyesno(APP_NAME, f"Désinstaller {a['nom']} ?") and self.confirm_close(a, "désinstallation"):
+            if self.store.is_running(a):
+                self.store.close_app(a)
             self.store.uninstall(a)
             self.render()
 
