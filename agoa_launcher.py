@@ -31,7 +31,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.5.9"
+LAUNCHER_VERSION = "0.6.0"
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
 # --- Dossier unique d'installation ---------------------------------------
@@ -839,7 +839,8 @@ class AgoaLauncher(tk.Tk):
         self.errors = {}        # id -> message
         self.launcher_rel = None
         self.filter = "all"
-        self.admin_ok = False   # onglet ADMIN déverrouillé (reverrouillé en quittant l'onglet)
+        self.admin_ok = False   # onglet ADMIN déverrouillé par Google (reverrouillé en quittant l'onglet)
+        self.admin_dlg = None
         self.query = tk.StringVar()
         self.query.trace_add("write", lambda *a: self.render())
         self.busy = {}
@@ -1022,69 +1023,59 @@ class AgoaLauncher(tk.Tk):
         self.render()
 
     def set_filter(self, k):
-        if k == "admin" and not self.admin_ok and not self.admin_unlock():
-            return
+        if k == "admin" and not self.admin_ok:
+            return self.admin_unlock()
         if k != "admin":
             self.admin_ok = False              # l'onglet ADMIN se reverrouille dès qu'on le quitte
         self.filter = k
         self.render()
 
-    # --- onglet ADMIN : code PIN -------------------------------------------
+    # --- onglet ADMIN : authentification Google supplémentaire --------------
     def admin_unlock(self):
-        """Demande le code (ou le crée au premier usage). Retourne True si l'accès est accordé."""
-        rec = self.store.settings.get("admin")
-        if not rec:
-            p1 = simpledialog.askstring(APP_NAME, f"Créer le code de l'onglet ADMIN (au moins {agoa_admin.MIN_LEN} caractères) :",
-                                        show="*", parent=self)
-            if p1 is None:
-                return False
-            if len(p1) < agoa_admin.MIN_LEN:
-                messagebox.showwarning(APP_NAME, f"Le code doit faire au moins {agoa_admin.MIN_LEN} caractères.", parent=self)
-                return False
-            if simpledialog.askstring(APP_NAME, "Confirmer le code :", show="*", parent=self) != p1:
-                messagebox.showwarning(APP_NAME, "Les deux codes ne correspondent pas.", parent=self)
-                return False
-            self.store.settings["admin"] = agoa_admin.make_record(p1)
-            save_json(SETTINGS_FILE, self.store.settings)
-            self.admin_ok = True
-            return True
-        wait = agoa_admin.locked_for(rec)
-        if wait:
-            messagebox.showwarning(APP_NAME, f"Trop d'essais. Réessayez dans {wait} s.", parent=self)
-            return False
-        pin = simpledialog.askstring(APP_NAME, "Code de l'onglet ADMIN :", show="*", parent=self)
-        if pin is None:
-            return False
-        if agoa_admin.check(rec, pin):
-            agoa_admin.register_ok(rec)
-            save_json(SETTINGS_FILE, self.store.settings)
-            self.admin_ok = True
-            return True
-        agoa_admin.register_fail(rec)
-        save_json(SETTINGS_FILE, self.store.settings)
-        messagebox.showerror(APP_NAME, "Code incorrect.", parent=self)
-        return False
-
-    def admin_change_pin(self):
-        rec = self.store.settings.get("admin")
-        if rec:
-            if agoa_admin.locked_for(rec):
-                return messagebox.showwarning(APP_NAME, f"Trop d'essais. Réessayez dans {agoa_admin.locked_for(rec)} s.", parent=self)
-            cur = simpledialog.askstring(APP_NAME, "Code ADMIN actuel :", show="*", parent=self)
-            if cur is None:
-                return
-            if not agoa_admin.check(rec, cur):
-                agoa_admin.register_fail(rec)
-                save_json(SETTINGS_FILE, self.store.settings)
-                return messagebox.showerror(APP_NAME, "Code incorrect.", parent=self)
-        p1 = simpledialog.askstring(APP_NAME, f"Nouveau code (au moins {agoa_admin.MIN_LEN} caractères) :", show="*", parent=self)
-        if p1 is None:
+        """Redemande une connexion Google (navigateur) et n'ouvre l'onglet que pour un compte de agoa_admin.ADMIN_EMAILS."""
+        client = conn.google_client([resource_path("google_client.json"), os.path.join(base_dir(), "google_client.json")])
+        if not client:
+            return messagebox.showerror(APP_NAME, "Identifiants Google absents de cette version du lanceur : "
+                                        "l'onglet ADMIN reste verrouillé.", parent=self)
+        if getattr(self, "admin_dlg", None) is not None:
             return
-        if len(p1) < agoa_admin.MIN_LEN or simpledialog.askstring(APP_NAME, "Confirmer le nouveau code :", show="*", parent=self) != p1:
-            return messagebox.showwarning(APP_NAME, "Code trop court ou confirmation différente : inchangé.", parent=self)
-        self.store.settings["admin"] = agoa_admin.make_record(p1)
-        save_json(SETTINGS_FILE, self.store.settings)
-        messagebox.showinfo(APP_NAME, "Code ADMIN modifié.", parent=self)
+        cancel = {"v": False}
+        dlg = tk.Toplevel(self, bg=BG, padx=24, pady=18)
+        dlg.title(APP_NAME)
+        dlg.transient(self)
+        dlg.resizable(False, False)
+        tk.Label(dlg, text="ONGLET ADMIN", font=MONO_B, bg=BG, fg=INK).pack(anchor="w")
+        tk.Label(dlg, text="Authentification Google en cours : terminez dans votre navigateur.\n"
+                           "Seul le compte administrateur est accepté.", font=("Segoe UI", 10), bg=BG, fg=INK,
+                 justify="left").pack(anchor="w", pady=(8, 12))
+        Flat(dlg, "Annuler", lambda: cancel.update(v=True), False, padx=12, pady=6).pack(anchor="e")
+        dlg.protocol("WM_DELETE_WINDOW", lambda: cancel.update(v=True))
+        self.admin_dlg = dlg
+        dlg.update_idletasks()
+        dlg.geometry("+%d+%d" % (self.winfo_rootx() + 80, self.winfo_rooty() + 80))
+
+        def work():
+            try:
+                r = conn.google_sign_in(client, http_call, webbrowser.open, cancel=lambda: cancel["v"],
+                                        emails=agoa_admin.ADMIN_EMAILS)
+                self.after(0, lambda: done(r, None))
+            except Exception as e:
+                self.after(0, lambda err=e: done(None, err))
+
+        def done(r, err):
+            try:
+                dlg.destroy()
+            except tk.TclError:
+                pass
+            self.admin_dlg = None
+            if err or not r or not agoa_admin.is_admin(r.get("email")):
+                if err and not cancel["v"]:
+                    messagebox.showerror(APP_NAME, str(err), parent=self)
+                return
+            self.admin_ok = True
+            self.filter = "admin"
+            self.render()
+        threading.Thread(target=work, daemon=True).start()
 
     def st(self, a):
         if a["id"] not in self.releases:
@@ -1135,7 +1126,7 @@ class AgoaLauncher(tk.Tk):
             s = self.st(a)
             if self.zone(a) != (self.filter if self.filter in ("test", "admin") else "main"):
                 continue                                         # APP TEST et ADMIN ont leurs propres applications
-            if self.zone(a) == "admin" and not self.admin_ok:    # sécurité : jamais d'application admin sans code
+            if self.zone(a) == "admin" and not self.admin_ok:    # sécurité : jamais d'application admin sans authentification Google
                 continue
             if self.filter == "ok" and s not in ("ok", "maj"):
                 continue
@@ -1283,7 +1274,6 @@ class AgoaLauncher(tk.Tk):
         m.add_command(label="Connexions (Ragic, Google, Claude)…", command=self.open_connections)
         m.add_command(label="Ouvrir le dossier C:\\AGOA", command=lambda: os.startfile(ROOT))
         m.add_command(label="Jeton GitHub (dépôts privés)…", command=self.ask_token)
-        m.add_command(label="Code de l'onglet ADMIN…", command=self.admin_change_pin)
         m.add_command(label="Actualiser", command=self.refresh)
         m.tk_popup(event.x_root, event.y_root)
 
