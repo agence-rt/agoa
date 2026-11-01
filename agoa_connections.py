@@ -180,11 +180,8 @@ _PAGE = ("<!doctype html><meta charset='utf-8'><title>{t}</title><body style=\"f
          "padding:28px 36px;max-width:420px'><h2 style='margin:0 0 8px'>{t}</h2><p style='margin:0;color:#555'>{m}</p></div>")
 
 
-def google_sign_in(client, call, open_url, cancel=None, timeout=300, emails=None):
-    """Ouvre le navigateur, attend le retour de Google, retourne {refresh_token,email,name,scopes,client_id}.
-
-    emails : liste de comptes autorisés. Mode « vérification d'identité » (onglet ADMIN) : le mot de passe Google est
-    redemandé, aucune session durable n'est demandée ni conservée, et seul un compte de la liste est accepté."""
+def google_sign_in(client, call, open_url, cancel=None, timeout=300):
+    """Ouvre le navigateur, attend le retour de Google, retourne {refresh_token,email,name,scopes,client_id}."""
     verifier = _b64url(secrets.token_bytes(32))
     challenge = _b64url(hashlib.sha256(verifier.encode()).digest())
     state = _b64url(secrets.token_bytes(16))
@@ -214,10 +211,9 @@ def google_sign_in(client, call, open_url, cancel=None, timeout=300, emails=None
     srv.timeout = 0.3
     redirect = f"http://127.0.0.1:{srv.server_address[1]}/callback"
     q = urllib.parse.urlencode({
-        "client_id": client["clientId"], "redirect_uri": redirect, "response_type": "code", "code_challenge": challenge,
-        "code_challenge_method": "S256", "state": state,
-        **({"scope": "openid email", "prompt": "login select_account", "max_age": "0"} if emails else
-           {"scope": " ".join(GOOGLE_SCOPES), "access_type": "offline", "prompt": "consent", "hd": ALLOWED_DOMAIN})})
+        "client_id": client["clientId"], "redirect_uri": redirect, "response_type": "code", "scope": " ".join(GOOGLE_SCOPES),
+        "code_challenge": challenge, "code_challenge_method": "S256", "state": state,
+        "access_type": "offline", "prompt": "consent", "hd": ALLOWED_DOMAIN})
     try:
         open_url(f"{AUTH_URL}?{q}")
         deadline = time.time() + timeout
@@ -238,10 +234,6 @@ def google_sign_in(client, call, open_url, cancel=None, timeout=300, emails=None
         raise ConnError("Google a refusé la connexion (identifiants de l'application incorrects ?).")
     p = decode_id_token(tok["id_token"])
     email = str(p.get("email", "")).lower()
-    if emails:
-        if not p.get("email_verified") or p.get("aud") != client["clientId"] or email not in [e.lower() for e in emails]:
-            raise ConnError("Ce compte Google n'a pas accès à l'onglet ADMIN.")
-        return {"email": email, "name": p.get("name") or email}
     if not p.get("email_verified") or not email.endswith("@" + ALLOWED_DOMAIN):
         raise ConnError(f"Seuls les comptes Google @{ALLOWED_DOMAIN} sont acceptés.")
     if not tok.get("refresh_token"):

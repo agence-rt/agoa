@@ -31,7 +31,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.6.0"
+LAUNCHER_VERSION = "0.6.1"
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
 # --- Dossier unique d'installation ---------------------------------------
@@ -839,8 +839,7 @@ class AgoaLauncher(tk.Tk):
         self.errors = {}        # id -> message
         self.launcher_rel = None
         self.filter = "all"
-        self.admin_ok = False   # onglet ADMIN déverrouillé par Google (reverrouillé en quittant l'onglet)
-        self.admin_dlg = None
+        self.admin_ok = False   # onglet ADMIN déverrouillé par code (reverrouillé en quittant l'onglet)
         self.query = tk.StringVar()
         self.query.trace_add("write", lambda *a: self.render())
         self.busy = {}
@@ -1030,52 +1029,26 @@ class AgoaLauncher(tk.Tk):
         self.filter = k
         self.render()
 
-    # --- onglet ADMIN : authentification Google supplémentaire --------------
+    # --- onglet ADMIN : code PIN unique ------------------------------------
     def admin_unlock(self):
-        """Redemande une connexion Google (navigateur) et n'ouvre l'onglet que pour un compte de agoa_admin.ADMIN_EMAILS."""
-        client = conn.google_client([resource_path("google_client.json"), os.path.join(base_dir(), "google_client.json")])
-        if not client:
-            return messagebox.showerror(APP_NAME, "Identifiants Google absents de cette version du lanceur : "
-                                        "l'onglet ADMIN reste verrouillé.", parent=self)
-        if getattr(self, "admin_dlg", None) is not None:
+        """Demande le code ADMIN (empreinte dans agoa_admin.py) ; blocage temporaire après des erreurs répétées."""
+        state = self.store.settings.setdefault("admin_lock", {})
+        wait = agoa_admin.locked_for(state)
+        if wait:
+            return messagebox.showwarning(APP_NAME, f"Trop d'essais. Réessayez dans {wait} s.", parent=self)
+        pin = simpledialog.askstring(APP_NAME, "Code de l'onglet ADMIN :", show="*", parent=self)
+        if pin is None:
             return
-        cancel = {"v": False}
-        dlg = tk.Toplevel(self, bg=BG, padx=24, pady=18)
-        dlg.title(APP_NAME)
-        dlg.transient(self)
-        dlg.resizable(False, False)
-        tk.Label(dlg, text="ONGLET ADMIN", font=MONO_B, bg=BG, fg=INK).pack(anchor="w")
-        tk.Label(dlg, text="Authentification Google en cours : terminez dans votre navigateur.\n"
-                           "Seul le compte administrateur est accepté.", font=("Segoe UI", 10), bg=BG, fg=INK,
-                 justify="left").pack(anchor="w", pady=(8, 12))
-        Flat(dlg, "Annuler", lambda: cancel.update(v=True), False, padx=12, pady=6).pack(anchor="e")
-        dlg.protocol("WM_DELETE_WINDOW", lambda: cancel.update(v=True))
-        self.admin_dlg = dlg
-        dlg.update_idletasks()
-        dlg.geometry("+%d+%d" % (self.winfo_rootx() + 80, self.winfo_rooty() + 80))
-
-        def work():
-            try:
-                r = conn.google_sign_in(client, http_call, webbrowser.open, cancel=lambda: cancel["v"],
-                                        emails=agoa_admin.ADMIN_EMAILS)
-                self.after(0, lambda: done(r, None))
-            except Exception as e:
-                self.after(0, lambda err=e: done(None, err))
-
-        def done(r, err):
-            try:
-                dlg.destroy()
-            except tk.TclError:
-                pass
-            self.admin_dlg = None
-            if err or not r or not agoa_admin.is_admin(r.get("email")):
-                if err and not cancel["v"]:
-                    messagebox.showerror(APP_NAME, str(err), parent=self)
-                return
+        if agoa_admin.check(pin.strip()):
+            agoa_admin.register_ok(state)
+            save_json(SETTINGS_FILE, self.store.settings)
             self.admin_ok = True
             self.filter = "admin"
             self.render()
-        threading.Thread(target=work, daemon=True).start()
+            return
+        agoa_admin.register_fail(state)
+        save_json(SETTINGS_FILE, self.store.settings)
+        messagebox.showerror(APP_NAME, "Code incorrect.", parent=self)
 
     def st(self, a):
         if a["id"] not in self.releases:
@@ -1126,7 +1099,7 @@ class AgoaLauncher(tk.Tk):
             s = self.st(a)
             if self.zone(a) != (self.filter if self.filter in ("test", "admin") else "main"):
                 continue                                         # APP TEST et ADMIN ont leurs propres applications
-            if self.zone(a) == "admin" and not self.admin_ok:    # sécurité : jamais d'application admin sans authentification Google
+            if self.zone(a) == "admin" and not self.admin_ok:    # sécurité : jamais d'application admin sans code
                 continue
             if self.filter == "ok" and s not in ("ok", "maj"):
                 continue
