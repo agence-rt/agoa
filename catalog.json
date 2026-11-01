@@ -70,6 +70,16 @@
       "repo": "agence-rt/data",
       "asset": "AGOA-DATA-Setup-*.exe",
       "exe": "AGOA DATA.exe"
+    },
+    {
+      "id": "cg",
+      "code": "CG",
+      "onglet": "admin",
+      "nom": "AGOA CG",
+      "description": "Calendrier des congés de l'agence : mois, année et compte rendu mensuel (CP, RTT)",
+      "repo": "agence-rt/agoa-conges",
+      "asset": "AGOA-CG-Setup-*.exe",
+      "exe": "AGOA CG.exe"
     }
   ]
 }
