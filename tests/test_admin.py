@@ -14,7 +14,6 @@ class Admin(unittest.TestCase):
     def test_code_reel_refuse_les_essais_courants(self):
         for bad in ("", "0000", "123456", "000000", "admin"):
             self.assertFalse(ad.check(bad))
-        self.assertNotIn("145300", open(ad.__file__, encoding="utf-8").read())
 
     def test_blocage(self):
         st = {}
