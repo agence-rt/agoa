@@ -30,7 +30,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.5.7"
+LAUNCHER_VERSION = "0.5.8"
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
 # --- Dossier unique d'installation ---------------------------------------
@@ -888,7 +888,7 @@ class AgoaLauncher(tk.Tk):
         bar = tk.Frame(self, bg=BG)
         bar.pack(fill="x", padx=10, pady=(12, 4))
         self.tabs = {}
-        for key in ("all", "ok", "maj", "absent"):
+        for key in ("all", "ok", "maj", "absent", "test"):
             lab = tk.Label(bar, font=MONO, padx=10, pady=6, cursor="hand2")
             lab.pack(side="left")
             lab.bind("<Button-1>", lambda e, k=key: self.set_filter(k))
@@ -1028,17 +1028,24 @@ class AgoaLauncher(tk.Tk):
             return "verif"
         return self.store.status(a, self.releases[a["id"]])
 
+    @staticmethod
+    def is_test(a):
+        """Application pas encore fonctionnelle : catalogue « onglet »: « test » → affichée seulement dans APP TEST."""
+        return a.get("onglet") == "test"
+
     def counts(self):
-        apps = self.catalog.get("apps", [])
+        allapps = self.catalog.get("apps", [])
+        apps = [a for a in allapps if not self.is_test(a)]
         st = [self.st(a) for a in apps]
-        return {"all": len(apps), "ok": st.count("ok") + st.count("maj"), "maj": st.count("maj"), "absent": st.count("absent")}
+        return {"all": len(apps), "ok": st.count("ok") + st.count("maj"), "maj": st.count("maj"), "absent": st.count("absent"),
+                "test": len(allapps) - len(apps)}
 
     # --- rendu -----------------------------------------------------------
     def render(self):
         if not hasattr(self, "grid_frame"):
             return
         c = self.counts()
-        names = {"all": "TOUTES", "ok": "INSTALLÉES", "maj": "MISES À JOUR", "absent": "NON INSTALLÉES"}
+        names = {"all": "TOUTES", "ok": "INSTALLÉES", "maj": "MISES À JOUR", "absent": "NON INSTALLÉES", "test": "APP TEST"}
         for k, lab in self.tabs.items():
             on = k == self.filter
             lab.config(text=f"{names[k]} {c[k]}", bg=INK if on else BG, fg="white" if on else MUTED)
@@ -1063,6 +1070,8 @@ class AgoaLauncher(tk.Tk):
         apps = []
         for a in self.catalog.get("apps", []):
             s = self.st(a)
+            if self.is_test(a) != (self.filter == "test"):     # les apps de test n'apparaissent que dans APP TEST
+                continue
             if self.filter == "ok" and s not in ("ok", "maj"):
                 continue
             if self.filter == "maj" and s != "maj":
@@ -1273,7 +1282,7 @@ class AgoaLauncher(tk.Tk):
 
     def update_all(self):
         for a in self.catalog.get("apps", []):
-            if self.st(a) == "maj":
+            if self.st(a) == "maj" and not self.is_test(a):
                 self.do_install(a)
 
     def do_update_launcher(self):

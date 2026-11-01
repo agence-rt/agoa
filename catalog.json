@@ -1,5 +1,5 @@
 {
-  "_aide": "Catalogue des programmes AGOA. 'repo' = dépôt GitHub. Version affichée = dernière Release. 'asset' = motif du fichier de la release (installateur *-Setup-*.exe ou .zip). 'exe' = programme installé dans C:\\AGOA\\<id>. 'code' = nom court affiché après AGOA ; 'icone' (facultatif) = lettres de l'icône, par défaut le code. Relu depuis le dépôt du lanceur : ajouter un programme = modifier ce fichier, sans recompiler.",
+  "_aide": "Catalogue des programmes AGOA. 'repo' = dépôt GitHub. Version affichée = dernière Release. 'asset' = motif du fichier de la release (installateur *-Setup-*.exe ou .zip). 'exe' = programme installé dans C:\\AGOA\\<id>. 'code' = nom court affiché après AGOA ; 'icone' (facultatif) = lettres de l'icône, par défaut le code. 'onglet': 'test' (facultatif) = programme pas encore fonctionnel, affiché seulement dans l'onglet APP TEST (retirer cette ligne pour le passer en production). Relu depuis le dépôt du lanceur : ajouter un programme = modifier ce fichier, sans recompiler.",
   "launcher": {
     "repo": "agence-rt/agoa",
     "asset": "AGOA-Launcher.exe"
@@ -52,6 +52,7 @@
     },
     {
       "id": "ope",
+      "onglet": "test",
       "code": "OPE",
       "nom": "AGOA OPE",
       "description": "Immeubles, opérations et propositions d'honoraires : consultation, avancement des phases et création dans Ragic",
@@ -61,6 +62,7 @@
     },
     {
       "id": "data",
+      "onglet": "test",
       "code": "DATA",
       "icone": "DA",
       "nom": "AGOA DATA",
