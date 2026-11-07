@@ -35,7 +35,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.9.1"
+LAUNCHER_VERSION = "0.9.2"
 AUTO_CHECK_MS = 15 * 60 * 1000          # vérification automatique des mises à jour toutes les 15 minutes
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
@@ -314,7 +314,8 @@ def _gh_latest_release_api(repo, token=None):
         "version": clean_tag(d["tag_name"]),
         "date": (d.get("published_at") or "")[:10],
         "notes": d.get("body") or "",
-        "assets": [{"name": a["name"], "url": a["url"], "size": a.get("size", 0)} for a in d.get("assets", [])],
+        "assets": [{"name": a["name"], "url": a["url"], "web": a.get("browser_download_url") or "", "size": a.get("size", 0)}
+                   for a in d.get("assets", [])],
     }
 
 
@@ -326,17 +327,33 @@ def pick_asset(rel, pattern):
 
 
 def gh_download(asset, dest, token=None, progress=None):
-    with gh_open(asset["url"], token, accept="application/octet-stream", timeout=60) as r, open(dest, "wb") as out:
-        total = int(r.headers.get("Content-Length") or asset.get("size") or 0)
-        done = 0
-        while True:
-            chunk = r.read(65536)
-            if not chunk:
-                break
-            out.write(chunk)
-            done += len(chunk)
-            if progress and total:
-                progress(min(done / total, 0.95))
+    """Télécharge un fichier de Release. Sans jeton, on passe d'abord par l'adresse publique github.com
+    (qui ne compte pas dans la limite de l'API : « HTTP Error 403: rate limit exceeded ») puis, en repli, par l'API."""
+    urls = [asset.get("url"), asset.get("web")]
+    if not token:
+        urls.reverse()
+    urls = [u for i, u in enumerate(urls) if u and u not in urls[:i]]
+    last = None
+    for u in urls:
+        try:
+            with gh_open(u, token if "api.github.com" in u else None, accept="application/octet-stream", timeout=60) as r, open(dest, "wb") as out:
+                total = int(r.headers.get("Content-Length") or asset.get("size") or 0)
+                done = 0
+                while True:
+                    chunk = r.read(65536)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    done += len(chunk)
+                    if progress and total:
+                        progress(min(done / total, 0.95))
+            return
+        except urllib.error.HTTPError as e:
+            last = e
+            if e.code not in (401, 403, 404, 429):
+                raise
+    if last:
+        raise last
 
 
 # --- Etat local / installation ----------------------------------------------
