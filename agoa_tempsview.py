@@ -25,13 +25,15 @@ def collate(data):
     for pc in sorted(data):
         p = data[pc]
         byw = {w["label"]: w for w in p.get("weeks", [])}
-        ops = {}
+        ops, srcs = {}, {}
         for w in p.get("weeks", []):
             for o in w["operations"]:
                 ops.setdefault(o["ref"], {})[w["label"]] = o["total_sec"]
+                for k, v in (o.get("by_source") or {}).items():
+                    srcs.setdefault(o["ref"], {}).setdefault(k, {})[w["label"]] = v
         tot = {l: byw[l]["total_sec"] for l in labels if l in byw}
         rows.append({"pc": pc, "user": p.get("user", ""), "updated": p.get("updated", ""), "totals": tot,
-                     "ops": sorted(ops.items(), key=lambda kv: -sum(kv[1].values()))})
+                     "ops": [(ref, per, srcs.get(ref, {})) for ref, per in sorted(ops.items(), key=lambda kv: -sum(kv[1].values()))]})
     return [(l, weeks[l]) for l in labels], rows
 
 
@@ -57,6 +59,7 @@ class TempsWindow(tk.Toplevel):
         self.tree.tag_configure("pc", font=("Segoe UI", 10, "bold"), background="#E9E7E0")
         self.tree.tag_configure("all", font=("Segoe UI", 10, "bold"), background="#F6D9D9")
         self.tree.tag_configure("old", foreground="#9A9A9A")
+        self.tree.tag_configure("src", foreground="#6B6F76")
         self.load()
 
     def load(self):
@@ -101,8 +104,13 @@ class TempsWindow(tk.Toplevel):
             label = f"{r['pc']}" + (f"  ({r['user']})" if r["user"] else "") + ("  — pas de synchro récente" if old else "")
             pid = self.tree.insert("", "end", iid="pc:" + r["pc"], text=label, values=[hm(r["totals"].get(l, 0)) for l, _ in weeks],
                                    tags=("pc", "old") if old else ("pc",), open=True)
-            for i, (ref, per) in enumerate(r["ops"]):
-                self.tree.insert(pid, "end", text="    " + ref, values=[hm(per.get(l, 0)) for l, _ in weeks])
+            for i, (ref, per, by_src) in enumerate(r["ops"]):
+                names = ", ".join(T.SOURCES.get(k, k) for k in sorted(by_src))
+                oid = self.tree.insert(pid, "end", text="    " + ref + (f"   [{names}]" if names else ""),
+                                       values=[hm(per.get(l, 0)) for l, _ in weeks], tags=("op",))
+                for k in sorted(by_src, key=lambda k: -sum(by_src[k].values())):          # une ligne par logiciel
+                    self.tree.insert(oid, "end", text="            ▸ " + T.SOURCES.get(k, k),
+                                     values=[hm(by_src[k].get(l, 0)) for l, _ in weeks], tags=("src",))
         if err:
             msg = "Erreur : " + err
         elif not folder:
