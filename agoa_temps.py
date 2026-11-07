@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import threading
 import unicodedata
 
 SOURCES = {"dtg": "DTG", "cctp": "CCTP", "vectorworks": "Vectorworks"}
@@ -238,8 +239,13 @@ class ActivityTracker:
     def __init__(self, temps_dir, step=5, flush=60, clock=dt.datetime.now):
         self.dir, self.step, self.flush, self.clock = temps_dir, step, flush, clock
         self.file, self.acc = None, 0.0
+        self.lock = threading.RLock()
 
     def sample(self, exe, title, idle):
+        with self.lock:
+            return self._sample(exe, title, idle)
+
+    def _sample(self, exe, title, idle):
         f = None
         if exe and "vectorworks" in exe.lower() and idle < IDLE_LIMIT:
             f = vw_file_from_title(title) or "(fichier inconnu).vwx"
@@ -253,12 +259,20 @@ class ActivityTracker:
         return f
 
     def _write(self):
+        with self.lock:
+            self._write_locked()
+
+    def _write_locked(self):
         if self.file and self.acc > 0:
             try:
                 append_entry(self.dir, "vectorworks", re.sub(r"\.vwx\w*$", "", self.file, flags=re.I), self.acc, self.clock(), self.file)
             except OSError:
                 pass
         self.acc = 0.0
+
+    def flush_now(self):
+        """Écrit tout de suite le créneau en cours (avant une publication) sans changer de fichier."""
+        self._write()
 
     def close(self):
         self._write()
@@ -302,3 +316,22 @@ def win_foreground():
             exe = os.path.basename(p.value)
         k.CloseHandle(h)
     return exe, buf.value, idle
+
+
+# --- vue hebdomadaire (publiée dans la Dropbox pour l'interface ADMIN) ---------------------------------------------
+def weekly(temps_dir, known, now, n=8):
+    """Semaines (vendredi 18 h → vendredi 18 h) des n dernières, la semaine en cours en premier."""
+    cur_start = last_cutoff(now)
+    cur_end = cur_start + dt.timedelta(days=7)
+    out = []
+    for i in range(n):
+        s = cur_start - dt.timedelta(days=7 * i)
+        e = s + dt.timedelta(days=7)
+        entries = read_entries(temps_dir, s, e)
+        if not entries and i > 0:
+            continue
+        sm = build_summary(entries, known, s, e, "", "")
+        out.append({"label": week_label(e), "start": sm["start"], "end": sm["end"], "current": i == 0,
+                    "total_sec": sm["total_sec"],
+                    "operations": [{"ref": o["ref"], "total_sec": o["total_sec"], "by_source": o["by_source"]} for o in sm["operations"]]})
+    return out

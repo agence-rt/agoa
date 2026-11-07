@@ -10,6 +10,7 @@ on:
       - "agoa_tray.py"
       - "agoa_temps.py"
       - "agoa_timesvc.py"
+      - "agoa_tempsview.py"
       - "agoa_admin.py"
       - "installer.nsi"
       - "icon.ico"

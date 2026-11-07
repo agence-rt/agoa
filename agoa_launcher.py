@@ -30,11 +30,12 @@ import agoa_admin
 import agoa_tray
 import agoa_temps
 import agoa_timesvc
+import agoa_tempsview
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.8.0"
+LAUNCHER_VERSION = "0.9.0"
 AUTO_CHECK_MS = 15 * 60 * 1000          # vérification automatique des mises à jour toutes les 15 minutes
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
@@ -1137,7 +1138,7 @@ class AgoaLauncher(tk.Tk):
                 self.after(0, self.prompt_launcher_update)
         threading.Thread(target=work, daemon=True).start()
 
-    def prompt_launcher_update(self):
+    def prompt_launcher_update(self, blocking=False):
         lr = self.launcher_rel
         if self.updating_launcher or not getattr(sys, "frozen", False) or not lr \
                 or vtuple(lr["version"]) <= vtuple(LAUNCHER_VERSION):
@@ -1146,7 +1147,9 @@ class AgoaLauncher(tk.Tk):
         self.show_window()
         messagebox.showinfo(APP_NAME, f"Une nouvelle version du launcher est disponible ({lr['version']}).\n\n"
                                       "Pour continuer, le launcher doit être mis à jour : il va se fermer puis redémarrer "
-                                      "automatiquement. Vos applications ouvertes ne sont pas touchées.", parent=self)
+                                      "automatiquement. Vos applications ouvertes ne sont pas touchées."
+                                      + ("\n\nAucune application AGOA ne peut être lancée avec une ancienne version du launcher."
+                                         if blocking else ""), parent=self)
         self.do_update_launcher()
 
     def fetch_releases(self):
@@ -1226,7 +1229,7 @@ class AgoaLauncher(tk.Tk):
         apps = [a for a in allapps if self.zone(a) == "main"]
         st = [self.st(a) for a in apps]
         return {"all": len(apps), "ok": st.count("ok") + st.count("maj"), "maj": st.count("maj"), "absent": st.count("absent"),
-                "test": sum(self.zone(a) == "test" for a in allapps), "admin": sum(self.zone(a) == "admin" for a in allapps)}
+                "test": sum(self.zone(a) == "test" for a in allapps), "admin": sum(self.zone(a) == "admin" for a in allapps) + 1}      # +1 : la tuile intégrée « Temps de travail »
 
     # --- rendu -----------------------------------------------------------
     def render(self):
@@ -1271,6 +1274,9 @@ class AgoaLauncher(tk.Tk):
             if q and q not in (a["nom"] + a["description"] + a["code"]).lower():
                 continue
             apps.append((a, s))
+        if self.filter == "admin" and self.admin_ok and (not q or "temps" in q):
+            apps.append(({"id": "_temps", "code": "TPS", "nom": "AGOA TEMPS", "repo": "", "exe": "",
+                          "description": "Temps de travail de chaque poste, semaine par semaine (DTG, CCTP, Vectorworks)"}, "builtin"))
 
         if not hasattr(self, "grid_title"):
             self.grid_title = tk.Label(self.grid_frame, font=MONO, bg=BG, fg=MUTED)
@@ -1328,7 +1334,42 @@ class AgoaLauncher(tk.Tk):
         return tk.Label(parent, text=text.upper(), font=MONO, bg=bg, fg=fg, padx=5, pady=2,
                         highlightthickness=1, highlightbackground=fg)
 
+    def card_temps(self, a, idx):
+        f = tk.Frame(self.grid_frame, bg=CARD, highlightbackground=LINE, highlightthickness=1, padx=18, pady=14)
+        head = tk.Frame(f, bg=CARD)
+        head.pack(fill="x")
+        tk.Label(head, text=f"{idx + 1:02d}", font=MONO_B, bg=RED, fg="white", padx=6, pady=2).pack(side="left")
+        tk.Label(head, text="INTÉGRÉ AU LAUNCHER", font=MONO, bg=CARD, fg=MUTED).pack(side="right")
+        row = tk.Frame(f, bg=CARD)
+        row.pack(fill="x", side="bottom")
+        Flat(row, "Ouvrir", self.open_temps, False, pady=8).pack(side="left", fill="x", expand=True)
+        mid = tk.Frame(f, bg=CARD)
+        mid.pack(fill="x", pady=(14, 10))
+        self.icon(mid, a["code"]).pack(side="left")
+        txt = tk.Frame(mid, bg=CARD)
+        txt.pack(side="left", padx=12, fill="x", expand=True)
+        title = tk.Frame(txt, bg=CARD)
+        title.pack(anchor="w")
+        tk.Label(title, text="AGOA ", font=("Segoe UI", 15, "bold"), bg=CARD, fg=INK).pack(side="left")
+        tk.Label(title, text="TEMPS", font=("Segoe UI", 15, "bold"), bg=CARD, fg=RED).pack(side="left")
+        tk.Label(txt, text=a["description"], font=("Segoe UI", 9), bg=CARD, fg="#444", wraplength=int(210 * self.S),
+                 justify="left", anchor="w").pack(anchor="w", pady=(2, 0))
+        return f
+
+    def open_temps(self):
+        w = getattr(self, "temps_win", None)
+        try:
+            if w and w.winfo_exists():
+                w.lift()
+                w.load()
+                return
+        except Exception:
+            pass
+        self.temps_win = agoa_tempsview.TempsWindow(self, self.timesvc)
+
     def card(self, a, s, idx):
+        if a["id"] == "_temps":
+            return self.card_temps(a, idx)
         rel = self.releases.get(a["id"])
         f = tk.Frame(self.grid_frame, bg=CARD, highlightbackground=LINE, highlightthickness=1, padx=18, pady=14)
         head = tk.Frame(f, bg=CARD)
@@ -1506,11 +1547,32 @@ class AgoaLauncher(tk.Tk):
                 self.after(0, lambda: fail(e))
         threading.Thread(target=work, daemon=True).start()
 
+    def launcher_outdated(self):
+        lr = self.launcher_rel
+        return bool(getattr(sys, "frozen", False) and lr and vtuple(lr["version"]) > vtuple(LAUNCHER_VERSION))
+
     def do_open(self, a):
-        try:
-            self.store.launch(a)
-        except Exception as e:
-            messagebox.showerror(APP_NAME, str(e))
+        """Aucun programme ne se lance tant que le launcher n'est pas à jour (vérification en direct, puis blocage)."""
+        def check():
+            try:
+                self.launcher_rel = gh_latest_release(LAUNCHER_REPO, self.store.token)
+            except Exception:
+                pass                                   # hors ligne : on ne peut pas savoir, on laisse lancer
+            self.after(0, go)
+
+        def go():
+            if self.launcher_outdated():
+                self.updating_launcher = False         # force la fenêtre d'invite même si elle a déjà été vue
+                self.prompt_launcher_update(blocking=True)
+                return
+            try:
+                self.store.launch(a)
+            except Exception as e:
+                messagebox.showerror(APP_NAME, str(e))
+        if getattr(sys, "frozen", False):
+            threading.Thread(target=check, daemon=True).start()
+        else:
+            go()
 
     def do_uninstall(self, a):
         if messagebox.askyesno(APP_NAME, f"Désinstaller {a['nom']} ?") and self.confirm_close(a, "désinstallation"):

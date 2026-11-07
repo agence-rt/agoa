@@ -26,6 +26,50 @@ def user_name():
     return os.environ.get("USERNAME") or os.environ.get("USER") or ""
 
 
+def dropbox_roots():
+    roots = []
+    for base in (os.environ.get("LOCALAPPDATA"), os.environ.get("APPDATA")):
+        if not base:
+            continue
+        info = _load(os.path.join(base, "Dropbox", "info.json"), None)
+        if isinstance(info, dict):
+            for v in info.values():
+                if isinstance(v, dict) and v.get("path"):
+                    roots.append(v["path"])
+    home = os.path.expanduser("~")
+    roots += [os.path.join(home, "Dropbox"), os.path.join(home, "T&K Dropbox"), home]
+    seen = []
+    for r in roots:
+        if r not in seen and os.path.isdir(r):
+            seen.append(r)
+    return seen
+
+
+def _subdirs(d):
+    try:
+        return [n for n in os.listdir(d) if os.path.isdir(os.path.join(d, n))]
+    except OSError:
+        return []
+
+
+def find_shared_dir(override=None):
+    """Dossier Dropbox commun où chaque poste dépose ses temps : 09 - BDD / AGOA / TEMPS (créé au besoin)."""
+    if override and os.path.isdir(override):
+        return override
+    for root in dropbox_roots():
+        parents = [root] + [os.path.join(root, n) for n in _subdirs(root) if re.match(r"(?i)agence|t&k|thollet", n)]
+        for p in parents:
+            for bdd in _subdirs(p):
+                if re.match(r"(?i)^09\b.*bdd", bdd):
+                    d = os.path.join(p, bdd, "AGOA", "TEMPS")
+                    try:
+                        os.makedirs(d, exist_ok=True)
+                        return d
+                    except OSError:
+                        continue
+    return None
+
+
 def _load(path, default):
     try:
         with open(path, encoding="utf-8") as f:
@@ -75,11 +119,55 @@ class TimeService:
                 if t - self._last_ops > 6 * 3600:
                     self._last_ops = t
                     self.refresh_operations()
+                if t - getattr(self, "_last_pub", 0) > 120:
+                    self._last_pub = t
+                    self.publish()
                 if t - self._last_due > 60:
                     self._last_due = t
                     self.send_due()
             except Exception as e:          # le suivi ne doit jamais faire tomber le launcher
                 self.last_error = str(e)[:200]
+
+    # --- publication des temps de ce poste dans la Dropbox (lue par l'interface ADMIN) -----
+    def shared_dir(self):
+        return find_shared_dir(self.shared_override() if self.shared_override else None)
+
+    shared_override = None
+
+    def local_payload(self):
+        return {"pc": pc_name(), "user": user_name(), "updated": self.now().isoformat(timespec="seconds"),
+                "weeks": T.weekly(self.dir, self.known(), self.now())}
+
+    def publish(self, force=False):
+        d = self.shared_dir()
+        if not d:
+            return False
+        self.tracker.flush_now()
+        p = self.local_payload()
+        body = {k: v for k, v in p.items() if k != "updated"}
+        sig = json.dumps(body, sort_keys=True)
+        if not force and sig == getattr(self, "_last_sig", None):
+            return True
+        _save(os.path.join(d, pc_name() + ".json"), p)
+        self._last_sig = sig
+        return True
+
+    def fetch_all(self):
+        """Temps de tous les postes (fichiers de la Dropbox) ; le poste local est recalculé à l'instant."""
+        d = self.shared_dir()
+        res = {}
+        if d:
+            for n in os.listdir(d):
+                if n.lower().endswith(".json"):
+                    j = _load(os.path.join(d, n), None)
+                    if isinstance(j, dict) and j.get("pc"):
+                        res[j["pc"]] = j
+        try:
+            self.publish(force=True)
+        except Exception:
+            pass
+        res[pc_name()] = self.local_payload()
+        return res, d
 
     # --- opérations connues (Ragic) -------------------------------------------------
     def known(self):
