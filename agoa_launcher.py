@@ -27,11 +27,12 @@ from ctypes import wintypes
 import webbrowser
 import agoa_connections as conn
 import agoa_admin
+import agoa_tray
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.6.3"
+LAUNCHER_VERSION = "0.7.0"
 AUTO_CHECK_MS = 15 * 60 * 1000          # vérification automatique des mises à jour toutes les 15 minutes
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
@@ -885,6 +886,17 @@ class AgoaLauncher(tk.Tk):
         except Exception:
             pass
         self.build_chrome()
+        self.started = False                  # vrai quand la fenêtre principale a été affichée (fin du splash)
+        self.tray = None
+        if os.name == "nt":                   # icône dans la zone de notification : la fenêtre se réduit au lieu de quitter
+            try:
+                self.tray = agoa_tray.Tray(resource_path("icon.ico"), "AGOA Launcher",
+                                           lambda: self.after(0, self.show_window), lambda: self.after(0, self.quit_app))
+                if not self.tray.alive:
+                    self.tray = None
+            except Exception:
+                self.tray = None
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.after(100, self.animate)
         self.withdraw()                       # la fenêtre principale attend la fin du démarrage
         self.t0 = time.time()
@@ -1015,11 +1027,44 @@ class AgoaLauncher(tk.Tk):
             self.splash.destroy()
         except Exception:
             pass
+        self.started = True
         self.deiconify()
         self.lift()
         self.render()
         threading.Thread(target=self.fetch_releases, daemon=True).start()
         self.after(AUTO_CHECK_MS, self.auto_check)
+
+    def on_close(self):
+        """Croix de la fenêtre : le lanceur reste actif en arrière-plan (icône près de l'horloge)."""
+        if not self.tray:
+            return self.destroy()
+        self.withdraw()
+        if not self.store.settings.get("tray_hint_done"):
+            self.store.settings["tray_hint_done"] = True
+            save_json(SETTINGS_FILE, self.store.settings)
+            self.tray.notify("AGOA Launcher", "Le launcher reste actif en arrière-plan et vérifie les mises à jour. "
+                                              "Clic droit sur cette icône pour le rouvrir ou le quitter.")
+
+    def show_window(self):
+        if not self.started:
+            return
+        self.deiconify()
+        self.state("normal")
+        self.lift()
+        try:
+            self.attributes("-topmost", True)
+            self.after(200, lambda: self.attributes("-topmost", False))
+            self.focus_force()
+        except Exception:
+            pass
+
+    def quit_app(self):
+        self.destroy()
+
+    def destroy(self):
+        if getattr(self, "tray", None):
+            self.tray.stop()
+        super().destroy()
 
     def auto_check(self):
         """Toutes les 15 min : revérifie lanceur, catalogue et programmes (sans toucher à l'affichage tant que rien ne change)."""
@@ -1047,6 +1092,7 @@ class AgoaLauncher(tk.Tk):
                 or vtuple(lr["version"]) <= vtuple(LAUNCHER_VERSION):
             return
         self.updating_launcher = True
+        self.show_window()
         messagebox.showinfo(APP_NAME, f"Une nouvelle version du launcher est disponible ({lr['version']}).\n\n"
                                       "Pour continuer, le launcher doit être mis à jour : il va se fermer puis redémarrer "
                                       "automatiquement. Vos applications ouvertes ne sont pas touchées.", parent=self)
@@ -1431,5 +1477,7 @@ def enable_hidpi():
 
 
 if __name__ == "__main__":
+    if not agoa_tray.acquire_single_instance():      # déjà ouvert (peut-être en arrière-plan) : on le réaffiche
+        sys.exit(0)
     enable_hidpi()
     AgoaLauncher().mainloop()

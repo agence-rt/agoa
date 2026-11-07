@@ -38,6 +38,9 @@ VIAddVersionKey /LANG=1036 "LegalCopyright" "Agence Rémi Thollet Architecte"
 !insertmacro MUI_LANGUAGE "French"
 
 Section "Install"
+  ; le lanceur peut tourner en arrière-plan (icône près de l'horloge) : on le ferme pour pouvoir remplacer l'exe
+  nsExec::Exec 'taskkill /F /IM AGOA-Launcher.exe'
+  Sleep 800
   SetOutPath "$INSTDIR"
   File "dist\AGOA-Launcher.exe"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
