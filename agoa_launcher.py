@@ -1104,6 +1104,16 @@ class AgoaLauncher(tk.Tk):
             return
         self.store.settings["autostart"] = bool(on)
         save_json(SETTINGS_FILE, self.store.settings)
+        try:                                   # repère lu par l'installateur : ne pas réactiver à la prochaine mise à jour
+            marker = os.path.join(TEMPS_DIR, "no_autostart")
+            if on:
+                if os.path.exists(marker):
+                    os.remove(marker)
+            else:
+                os.makedirs(TEMPS_DIR, exist_ok=True)
+                open(marker, "w").close()
+        except OSError:
+            pass
 
     def ensure_autostart(self):
         """Installé : démarre avec Windows (sauf si l'utilisateur l'a désactivé)."""

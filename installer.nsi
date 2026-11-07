@@ -51,6 +51,10 @@ Section "Install"
   CreateShortcut "$SMPROGRAMS\${APPNAME}.lnk" "$INSTDIR\AGOA-Launcher.exe"
   CreateShortcut "$DESKTOP\${APPNAME}.lnk" "$INSTDIR\AGOA-Launcher.exe"
 
+  ; démarrage automatique avec Windows (en arrière-plan), sauf si l'utilisateur l'a désactivé dans le launcher
+  IfFileExists "$INSTDIR\..\_temps\no_autostart" +2 0
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "AGOA Launcher" '"$INSTDIR\AGOA-Launcher.exe" --background'
+
   WriteRegStr HKCU "${REGKEY}" "DisplayName" "${APPNAME}"
   WriteRegStr HKCU "${REGKEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "${REGKEY}" "Publisher" "Agence Rémi Thollet Architecte"
