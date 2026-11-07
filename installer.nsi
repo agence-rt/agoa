@@ -62,6 +62,8 @@ Section "Install"
 SectionEnd
 
 Section "Uninstall"
+  nsExec::Exec 'taskkill /F /IM AGOA-Launcher.exe'
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "AGOA Launcher"
   ; ne touche pas aux applications AGOA installées dans C:\AGOA\<programme>
   Delete "$INSTDIR\AGOA-Launcher.exe"
   Delete "$INSTDIR\Uninstall.exe"

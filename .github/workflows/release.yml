@@ -8,6 +8,8 @@ on:
       - "agoa_launcher.py"
       - "agoa_connections.py"
       - "agoa_tray.py"
+      - "agoa_temps.py"
+      - "agoa_timesvc.py"
       - "agoa_admin.py"
       - "installer.nsi"
       - "icon.ico"

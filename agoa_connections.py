@@ -247,3 +247,20 @@ def google_revoke(token, call):
         call(REVOKE_URL, {"Content-Type": "application/x-www-form-urlencoded"}, urllib.parse.urlencode({"token": token}).encode())
     except Exception:
         pass  # sans importance : la session est de toute façon supprimée ici
+
+
+def google_access_token(client, refresh_token, call):
+    """Jeton d'accès Google (valable ~1 h) obtenu à partir de la session durable enregistrée dans le launcher."""
+    body = urllib.parse.urlencode({"client_id": client["clientId"], "client_secret": client["clientSecret"],
+                                   "refresh_token": refresh_token, "grant_type": "refresh_token"}).encode()
+    r = json.loads(call(TOKEN_URL, {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"}, body).decode())
+    if not r.get("access_token"):
+        raise ConnError("Google n'a pas fourni de jeton d'accès.")
+    return r["access_token"]
+
+
+def gmail_send(access_token, raw_message, call):
+    """Envoie un message déjà formaté (bytes RFC 822) depuis le compte Google connecté."""
+    body = json.dumps({"raw": _b64url(raw_message)}).encode()
+    call("https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+         {"Authorization": "Bearer " + access_token, "Content-Type": "application/json", "Accept": "application/json"}, body)

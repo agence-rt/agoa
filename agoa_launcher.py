@@ -28,11 +28,13 @@ import webbrowser
 import agoa_connections as conn
 import agoa_admin
 import agoa_tray
+import agoa_temps
+import agoa_timesvc
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.7.0"
+LAUNCHER_VERSION = "0.8.0"
 AUTO_CHECK_MS = 15 * 60 * 1000          # vérification automatique des mises à jour toutes les 15 minutes
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
@@ -48,6 +50,7 @@ CONFIG_DIR = os.path.join(ROOT, "_launcher")
 STATE_FILE = os.path.join(CONFIG_DIR, "state.json")
 SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
 CATALOG_CACHE = os.path.join(CONFIG_DIR, "catalog.cache.json")
+TEMPS_DIR = os.path.join(ROOT, "_temps")            # journaux de temps (DTG, CCTP, Vectorworks) et synthèses hebdomadaires
 CONN_FILE = os.path.join(ROOT, "_connexions", "connexions.dat")   # connexions partagées (chiffré DPAPI)
 INSTALL_DIR = os.path.join(ROOT, "Launcher")           # C:\\AGOA\\Launcher\\AGOA-Launcher.exe
 SETUP_PATTERN = "AGOA-Launcher-Setup-*.exe"
@@ -897,10 +900,19 @@ class AgoaLauncher(tk.Tk):
             except Exception:
                 self.tray = None
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.background = "--background" in sys.argv and self.tray is not None    # démarrage avec Windows : directement dans la zone de notification
+        self.timesvc = agoa_timesvc.TimeService(
+            TEMPS_DIR, self.store.conn,
+            lambda: conn.google_client([resource_path("google_client.json"), os.path.join(base_dir(), "google_client.json")]),
+            http_call, foreground=agoa_temps.win_foreground if os.name == "nt" else None)
+        self.timesvc.start()
+        self.ensure_autostart()
         self.after(100, self.animate)
         self.withdraw()                       # la fenêtre principale attend la fin du démarrage
         self.t0 = time.time()
         self.splash = Splash(self, self.S, LAUNCHER_VERSION)
+        if self.background:
+            self.splash.withdraw()
         self.splash.set_status("Recherche de mises à jour…")
         threading.Thread(target=self.startup_work, daemon=True).start()
 
@@ -1028,8 +1040,11 @@ class AgoaLauncher(tk.Tk):
         except Exception:
             pass
         self.started = True
-        self.deiconify()
-        self.lift()
+        if self.background:                   # lancé par Windows : reste dans la zone de notification
+            self.background = False
+        else:
+            self.deiconify()
+            self.lift()
         self.render()
         threading.Thread(target=self.fetch_releases, daemon=True).start()
         self.after(AUTO_CHECK_MS, self.auto_check)
@@ -1061,7 +1076,43 @@ class AgoaLauncher(tk.Tk):
     def quit_app(self):
         self.destroy()
 
+    # --- démarrage automatique avec Windows ---------------------------------------------------
+    RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+    def autostart_on(self):
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, self.RUN_KEY) as k:
+                return bool(winreg.QueryValueEx(k, "AGOA Launcher")[0])
+        except Exception:
+            return False
+
+    def set_autostart(self, on):
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, self.RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+                if on:
+                    winreg.SetValueEx(k, "AGOA Launcher", 0, winreg.REG_SZ,
+                                      f'"{os.path.join(INSTALL_DIR, "AGOA-Launcher.exe")}" --background')
+                else:
+                    try:
+                        winreg.DeleteValue(k, "AGOA Launcher")
+                    except FileNotFoundError:
+                        pass
+        except Exception:
+            return
+        self.store.settings["autostart"] = bool(on)
+        save_json(SETTINGS_FILE, self.store.settings)
+
+    def ensure_autostart(self):
+        """Installé : démarre avec Windows (sauf si l'utilisateur l'a désactivé)."""
+        if os.name == "nt" and getattr(sys, "frozen", False) and is_installed_launcher() \
+                and self.store.settings.get("autostart", True) and not self.autostart_on():
+            self.set_autostart(True)
+
     def destroy(self):
+        if getattr(self, "timesvc", None):
+            self.timesvc.stop()
         if getattr(self, "tray", None):
             self.tray.stop()
         super().destroy()
@@ -1358,6 +1409,10 @@ class AgoaLauncher(tk.Tk):
         m.add_command(label="Ouvrir le dossier C:\\AGOA", command=lambda: os.startfile(ROOT))
         m.add_command(label="Jeton GitHub (dépôts privés)…", command=self.ask_token)
         m.add_command(label="Actualiser", command=self.refresh)
+        if os.name == "nt" and getattr(sys, "frozen", False):
+            m.add_separator()
+            on = self.autostart_on()
+            m.add_command(label=("✓ " if on else "    ") + "Démarrer avec Windows", command=lambda: self.set_autostart(not on))
         m.tk_popup(event.x_root, event.y_root)
 
     def open_connections(self):
