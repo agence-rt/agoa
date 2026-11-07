@@ -35,7 +35,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.9.0"
+LAUNCHER_VERSION = "0.9.1"
 AUTO_CHECK_MS = 15 * 60 * 1000          # vérification automatique des mises à jour toutes les 15 minutes
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 

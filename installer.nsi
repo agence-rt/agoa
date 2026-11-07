@@ -54,6 +54,10 @@ Section "Install"
   WriteRegStr HKCU "${REGKEY}" "DisplayName" "${APPNAME}"
   WriteRegStr HKCU "${REGKEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "${REGKEY}" "Publisher" "Agence Rémi Thollet Architecte"
+  ; démarrage automatique avec Windows (en arrière-plan). Installation manuelle seulement : une mise à jour silencieuse
+  ; ne doit pas réactiver ce que l'utilisateur aurait désactivé dans le launcher.
+  IfSilent +2 0
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "AGOA Launcher" '"$INSTDIR\AGOA-Launcher.exe" --background'
   WriteRegStr HKCU "${REGKEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "${REGKEY}" "DisplayIcon" "$INSTDIR\AGOA-Launcher.exe"
   WriteRegStr HKCU "${REGKEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'
