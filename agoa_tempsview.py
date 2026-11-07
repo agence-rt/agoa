@@ -87,7 +87,7 @@ class TempsWindow(tk.Toplevel):
         self.tree.column("#0", width=300, anchor="w", stretch=True)
         for c, (lab, cur) in zip(cols, weeks):
             self.tree.heading(c, text=lab + (" ● en cours" if cur else ""))
-            self.tree.column(c, width=105, anchor="e", stretch=False)
+            self.tree.column(c, width=int(150 * getattr(self.app, "S", 1.0)), anchor="e", stretch=False)
         self.tree.delete(*self.tree.get_children())
         all_tot = {}
         for r in rows:
