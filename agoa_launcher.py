@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import ssl
 import socket
 import urllib.error
@@ -35,7 +36,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
 APP_NAME = "AGOA Launcher"
-LAUNCHER_VERSION = "0.9.3"
+LAUNCHER_VERSION = "0.9.4"
 AUTO_CHECK_MS = 15 * 60 * 1000          # vérification automatique des mises à jour toutes les 15 minutes
 LAUNCHER_REPO = "agence-rt/agoa"  # dépôt du lanceur (mises à jour)
 
@@ -263,15 +264,15 @@ def net_reason(e, what="GitHub"):
     return f"{what} injoignable : " + (str(r)[:70] or type(r).__name__)
 
 
-def gh_latest_release_web(repo):
+def gh_latest_release_web(repo, timeout=20):
     """Repli sans api.github.com (souvent bloqué ou limité) : pages web publiques de github.com."""
-    with gh_open(f"https://github.com/{repo}/releases/latest", None, accept="text/html", timeout=20) as r:
+    with gh_open(f"https://github.com/{repo}/releases/latest", None, accept="text/html", timeout=timeout) as r:
         final = r.geturl()
     m = re.search(r"/releases/tag/([^/?#]+)", final)
     if not m:
         raise RuntimeError("Aucune version publiée")
     tag = urllib.parse.unquote(m.group(1))
-    with gh_open(f"https://github.com/{repo}/releases/expanded_assets/{m.group(1)}", None, accept="text/html", timeout=20) as r:
+    with gh_open(f"https://github.com/{repo}/releases/expanded_assets/{m.group(1)}", None, accept="text/html", timeout=timeout) as r:
         html = r.read().decode("utf-8", "replace")
     assets, seen = [], set()
     for href in re.findall(r'href="(/' + re.escape(repo) + r'/releases/download/[^"]+)"', html):
@@ -282,27 +283,37 @@ def gh_latest_release_web(repo):
     return {"version": clean_tag(tag), "date": "", "notes": "", "assets": assets}
 
 
-def gh_latest_release(repo, token=None):
+def gh_latest_version_web(repo, timeout=8):
+    """Numéro de la dernière version via github.com (une seule requête légère, hors limite de l'API)."""
+    with gh_open(f"https://github.com/{repo}/releases/latest", None, accept="text/html", timeout=timeout) as r:
+        final = r.geturl()
+    m = re.search(r"/releases/tag/([^/?#]+)", final)
+    if not m:
+        raise RuntimeError("Aucune version publiée")
+    return clean_tag(urllib.parse.unquote(m.group(1)))
+
+
+def gh_latest_release(repo, token=None, timeout=20):
     """Version publiée (API GitHub, puis repli sur le site web). Lève RuntimeError avec une cause lisible."""
     try:
-        return _gh_latest_release_api(repo, token)
+        return _gh_latest_release_api(repo, token, timeout)
     except RuntimeError as e:
         if "Aucune version" in str(e):
             raise
     except Exception:
         pass
     try:
-        return gh_latest_release_web(repo)
+        return gh_latest_release_web(repo, timeout)
     except RuntimeError:
         raise
     except Exception as e:
         raise RuntimeError(net_reason(e))
 
 
-def _gh_latest_release_api(repo, token=None):
+def _gh_latest_release_api(repo, token=None, timeout=20):
     """Retourne {'version','date','assets':[{name,url,size}]} ou lève une exception."""
     try:
-        with gh_open(f"https://api.github.com/repos/{repo}/releases/latest", token) as r:
+        with gh_open(f"https://api.github.com/repos/{repo}/releases/latest", token, timeout=timeout) as r:
             d = json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         if e.code == 404:
@@ -1155,11 +1166,13 @@ class AgoaLauncher(tk.Tk):
         def work():
             try:
                 try:
-                    self.launcher_rel = gh_latest_release(LAUNCHER_REPO, self.store.token)
+                    old = self.launcher_rel
+                    if not (old and gh_latest_version_web(LAUNCHER_REPO, 8) == old["version"]):
+                        self.launcher_rel = gh_latest_release(LAUNCHER_REPO, self.store.token, 12)
                 except Exception:
                     pass
                 self.catalog, self.catalog_error = self.store.load_catalog()
-                self.fetch_releases()
+                self.fetch_releases(light=True)
             finally:
                 self.checking = False
                 self.after(0, self.prompt_launcher_update)
@@ -1179,16 +1192,32 @@ class AgoaLauncher(tk.Tk):
                                          if blocking else ""), parent=self)
         self.do_update_launcher()
 
-    def fetch_releases(self):
+    def fetch_releases(self, light=False, timeout=12):
+        """Versions publiées de tous les programmes, en parallèle. light=True (contrôle périodique) : une requête légère par
+        programme, et le détail complet n'est redemandé que si la version a changé (ménage la limite de l'API GitHub)."""
         tok = self.store.token
-        for a in self.catalog.get("apps", []):
+
+        def one(a):
             try:
-                self.releases[a["id"]] = gh_latest_release(a["repo"], tok)
+                old = self.releases.get(a["id"])
+                if light and old:
+                    try:
+                        if gh_latest_version_web(a["repo"], min(timeout, 8)) == old["version"]:
+                            self.errors.pop(a["id"], None)
+                            return
+                    except Exception:
+                        pass
+                self.releases[a["id"]] = gh_latest_release(a["repo"], tok, timeout)
                 self.errors.pop(a["id"], None)
             except Exception as e:
-                self.releases[a["id"]] = None
-                self.errors[a["id"]] = str(e) if isinstance(e, RuntimeError) else net_reason(e)
+                if not (light and self.releases.get(a["id"])):        # contrôle périodique raté : on garde la dernière valeur connue
+                    self.releases[a["id"]] = None
+                    self.errors[a["id"]] = str(e) if isinstance(e, RuntimeError) else net_reason(e)
             self.after(0, self.render)
+        apps = list(self.catalog.get("apps", []))
+        if apps:
+            with ThreadPoolExecutor(max_workers=4) as ex:
+                list(ex.map(one, apps))
         self.checking = False
         self.after(0, self.render)
 
@@ -1579,27 +1608,16 @@ class AgoaLauncher(tk.Tk):
         return bool(getattr(sys, "frozen", False) and lr and vtuple(lr["version"]) > vtuple(LAUNCHER_VERSION))
 
     def do_open(self, a):
-        """Aucun programme ne se lance tant que le launcher n'est pas à jour (vérification en direct, puis blocage)."""
-        def check():
-            try:
-                self.launcher_rel = gh_latest_release(LAUNCHER_REPO, self.store.token)
-            except Exception:
-                pass                                   # hors ligne : on ne peut pas savoir, on laisse lancer
-            self.after(0, go)
-
-        def go():
-            if self.launcher_outdated():
-                self.updating_launcher = False         # force la fenêtre d'invite même si elle a déjà été vue
-                self.prompt_launcher_update(blocking=True)
-                return
-            try:
-                self.store.launch(a)
-            except Exception as e:
-                messagebox.showerror(APP_NAME, str(e))
-        if getattr(sys, "frozen", False):
-            threading.Thread(target=check, daemon=True).start()
-        else:
-            go()
+        """Lance tout de suite. Bloqué seulement si on SAIT déjà que le launcher est périmé (vérifié au démarrage puis toutes les
+        15 min) ; un contrôle en arrière-plan rafraîchit cette information sans retarder le lancement."""
+        if self.launcher_outdated():
+            self.updating_launcher = False         # force la fenêtre d'invite même si elle a déjà été vue
+            self.prompt_launcher_update(blocking=True)
+            return
+        try:
+            self.store.launch(a)
+        except Exception as e:
+            messagebox.showerror(APP_NAME, str(e))
 
     def do_uninstall(self, a):
         if messagebox.askyesno(APP_NAME, f"Désinstaller {a['nom']} ?") and self.confirm_close(a, "désinstallation"):
