@@ -104,3 +104,15 @@ class Tracker(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Pies(unittest.TestCase):
+    def test_pie(self):
+        ops = [{"ref": "A", "total_sec": 3000, "by_source": {"dtg": 1800, "chrome": 1200}}, {"ref": "B", "total_sec": 600, "by_source": {"dtg": 600}}]
+        sl = T.source_slices(ops)
+        self.assertEqual([(n, v) for n, v, _ in sl], [("DTG", 2400), ("Chrome", 1200)])
+        self.assertTrue(T.pie_png(sl, 120).startswith(b"\x89PNG"))
+        self.assertIn("<path", T.pie_svg(sl))
+        h = T.report_html("2026-S46", "2026-11-06T18:00", "2026-11-13T18:00", [{"pc": "K", "name": "Compta", "user": "u", "total_sec": 3600, "operations": ops}])
+        self.assertIn("Compta", h)
+        self.assertIn("<svg", h)

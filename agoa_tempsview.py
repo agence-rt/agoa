@@ -1,6 +1,7 @@
 """Interface ADMIN : temps de travail de chaque poste, semaine par semaine (semaine en cours comprise)."""
 import datetime as dt
 import threading
+import webbrowser
 import tkinter as tk
 from tkinter import simpledialog, ttk
 
@@ -51,6 +52,11 @@ class TempsWindow(tk.Toplevel):
         self.info = tk.Label(top, text="", font=("Segoe UI", 9), bg=BG, fg=MUTED)
         self.info.pack(side="left", padx=12)
         tk.Button(top, text="Actualiser", command=self.load, relief="flat", bg=INK, fg="white", padx=12, pady=3).pack(side="right")
+        self.pie_btn = tk.Menubutton(top, text="Camemberts ▾", relief="flat", bg=RED, fg="white", padx=12, pady=3, activebackground=RED,
+                                     activeforeground="white")
+        self.pie_menu = tk.Menu(self.pie_btn, tearoff=0)
+        self.pie_btn.config(menu=self.pie_menu)
+        self.pie_btn.pack(side="right", padx=8)
         tk.Button(top, text="Renommer le poste…", command=self.rename, relief="flat", bg="#E9E7E0", fg=INK, padx=12, pady=3).pack(side="right", padx=8)
         self.tree = ttk.Treeview(self, show="tree headings", selectmode="browse")
         sb = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
@@ -62,8 +68,16 @@ class TempsWindow(tk.Toplevel):
         self.tree.tag_configure("old", foreground="#9A9A9A")
         self.tree.tag_configure("src", foreground="#6B6F76")
         self.tree.bind("<Double-1>", lambda e: self.rename(self.tree.identify_row(e.y)))
-        self.nicks = {}
+        self.nicks, self.data = {}, {}
         self.load()
+
+    def open_report(self, label):
+        """Rapport de la semaine (camembert du temps par logiciel, un par ordinateur) dans le navigateur."""
+        try:
+            path = self.svc.report_file(label, self.data, self.nicks)
+            webbrowser.open("file:///" + path.replace("\\", "/"))
+        except Exception as e:
+            self.info.config(text="Rapport impossible : " + str(e)[:100])
 
     def rename(self, iid=None):
         """Donne un surnom à un poste (partagé par tous les postes via la Dropbox). Surnom vide = retour au nom de l'ordinateur."""
@@ -105,6 +119,7 @@ class TempsWindow(tk.Toplevel):
         if not self.winfo_exists():
             return
         self.nicks = nicks or {}
+        self.data = data
         weeks, rows = collate(data)
         cols = [f"w{i}" for i in range(len(weeks))]
         self.tree.configure(columns=cols)
@@ -113,6 +128,9 @@ class TempsWindow(tk.Toplevel):
         for c, (lab, cur) in zip(cols, weeks):
             self.tree.heading(c, text=lab + (" ● en cours" if cur else ""))
             self.tree.column(c, width=int(150 * getattr(self.app, "S", 1.0)), anchor="e", stretch=False)
+        self.pie_menu.delete(0, "end")
+        for lab, cur in weeks:                      # un rapport par semaine, la semaine en cours en premier
+            self.pie_menu.add_command(label=lab + (" (en cours)" if cur else ""), command=lambda l=lab: self.open_report(l))
         self.tree.delete(*self.tree.get_children())
         all_tot = {}
         for r in rows:

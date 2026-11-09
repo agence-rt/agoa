@@ -187,6 +187,22 @@ class TimeService:
             j.pop(pc, None)
         _save(self.nick_path(), j)
 
+    def report_file(self, label, data, nicks):
+        """Écrit le rapport HTML (camembert par ordinateur) d'une semaine à partir des temps de tous les postes ; renvoie le chemin."""
+        pcs, start, end = [], "", ""
+        for pc in sorted(data):
+            for w in data[pc].get("weeks", []):
+                if w["label"] == label:
+                    start, end = w["start"], w["end"]
+                    pcs.append({"pc": pc, "name": (nicks or {}).get(pc), "user": data[pc].get("user", ""),
+                                "total_sec": w["total_sec"], "operations": w["operations"]})
+        out = os.path.join(self.dir, "rapports")
+        os.makedirs(out, exist_ok=True)
+        path = os.path.join(out, f"camemberts_{label}.html")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(T.report_html(label, start, end, pcs))
+        return path
+
     # --- opérations connues (Ragic) -------------------------------------------------
     def known(self):
         return _load(self.ops_path, [])
@@ -252,11 +268,18 @@ class TimeService:
         client = self.client_fn()
         if not g or not g.get("refresh_token") or not client:
             raise RuntimeError("compte Google non connecté dans le launcher")
+        end = dt.datetime.fromisoformat(s["end"])
+        lab = T.week_label(end)
         m = email.message.EmailMessage()
         m["To"] = TO
-        m["Subject"] = f"[AGOA] Temps de travail {T.week_label(dt.datetime.fromisoformat(s['end']))} — {s['pc']}"
+        m["Subject"] = f"[AGOA] Temps de travail {lab} — {s['pc']}"
         m.set_content(T.render_text(s) + "\n\nMessage automatique du launcher AGOA.")
-        m.add_attachment(T.render_csv(s).encode("utf-8"), maintype="text", subtype="csv",
-                         filename=f"temps_{T.week_label(dt.datetime.fromisoformat(s['end']))}_{s['pc']}.csv")
+        m.add_alternative(T.email_html(s), subtype="html")
+        slices = T.source_slices(s["operations"])
+        if slices:
+            m.get_payload()[1].add_related(T.pie_png(slices, 440), "image", "png", cid="<pie>")      # camembert : temps par logiciel
+        m.add_attachment(T.render_csv(s).encode("utf-8"), maintype="text", subtype="csv", filename=f"temps_{lab}_{s['pc']}.csv")
+        rep = T.report_html(lab, s["start"], s["end"], [{"pc": s["pc"], "user": s["user"], "total_sec": s["total_sec"], "operations": s["operations"]}])
+        m.add_attachment(rep.encode("utf-8"), maintype="text", subtype="html", filename=f"rapport_{lab}_{s['pc']}.html")
         tok = conn.google_access_token(client, g["refresh_token"], self.call)
         conn.gmail_send(tok, m.as_bytes(), self.call)

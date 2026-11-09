@@ -366,3 +366,123 @@ def weekly(temps_dir, known, now, n=8):
                     "total_sec": sm["total_sec"],
                     "operations": [{"ref": o["ref"], "total_sec": o["total_sec"], "by_source": o["by_source"]} for o in sm["operations"]]})
     return out
+
+
+# --- camemberts : temps par logiciel et par ordinateur ---------------------------------------------------------------
+COLORS = {"dtg": "#B22222", "cctp": "#1F6FB2", "vectorworks": "#2E8B57", "multidoc": "#D98E04", "chrome": "#7B52AB"}
+
+
+def source_slices(operations):
+    """[(nom, secondes, couleur)] : temps par logiciel, tout opérations confondues, du plus long au plus court."""
+    tot = {}
+    for o in operations:
+        for k, v in (o.get("by_source") or {}).items():
+            tot[k] = tot.get(k, 0) + v
+    return [(SOURCES.get(k, k), v, COLORS.get(k, "#888888")) for k, v in sorted(tot.items(), key=lambda kv: -kv[1]) if v > 0]
+
+
+def pie_svg(slices, size=220):
+    import math
+    total = sum(v for _, v, _ in slices)
+    r = size / 2 - 4
+    c = size / 2
+    if total <= 0:
+        return f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}"><circle cx="{c}" cy="{c}" r="{r}" fill="#EEE"/></svg>'
+    out = [f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}" xmlns="http://www.w3.org/2000/svg">']
+    a0 = -math.pi / 2
+    for name, v, col in slices:
+        frac = v / total
+        if frac >= 0.9999:
+            out.append(f'<circle cx="{c}" cy="{c}" r="{r}" fill="{col}"><title>{name}</title></circle>')
+            break
+        a1 = a0 + frac * 2 * math.pi
+        x0, y0, x1, y1 = c + r * math.cos(a0), c + r * math.sin(a0), c + r * math.cos(a1), c + r * math.sin(a1)
+        out.append(f'<path d="M{c:.1f} {c:.1f} L{x0:.2f} {y0:.2f} A{r:.1f} {r:.1f} 0 {1 if frac > 0.5 else 0} 1 {x1:.2f} {y1:.2f} Z" '
+                   f'fill="{col}" stroke="#fff" stroke-width="1.5"><title>{name}</title></path>')
+        a0 = a1
+    out.append("</svg>")
+    return "".join(out)
+
+
+def pie_png(slices, size=300):
+    """Camembert en PNG (sans bibliothèque externe) pour l'insérer dans un mail."""
+    import math
+    import struct
+    import zlib
+    total = sum(v for _, v, _ in slices)
+    cols = [tuple(int(col[i:i + 2], 16) for i in (1, 3, 5)) for _, _, col in slices]
+    bounds, acc = [], 0.0
+    for _, v, _ in slices:
+        acc += v / total if total else 0
+        bounds.append(acc)
+    R, c = size / 2 - 3, size / 2
+    sub = (0.25, 0.75)
+    rows = []
+    for y in range(size):
+        row = bytearray([0])
+        for x in range(size):
+            r = g = b = 0
+            for sy in sub:
+                for sx in sub:
+                    dx, dy = x + sx - c, y + sy - c
+                    if total > 0 and dx * dx + dy * dy <= R * R:
+                        t = (math.atan2(dx, -dy) / (2 * math.pi)) % 1.0       # 0 en haut, sens horaire
+                        k = next((i for i, bnd in enumerate(bounds) if t < bnd), len(bounds) - 1)
+                        pr, pg, pb = cols[k]
+                    else:
+                        pr = pg = pb = 255
+                    r += pr
+                    g += pg
+                    b += pb
+            row += bytes((r // 4, g // 4, b // 4))
+        rows.append(bytes(row))
+    raw = b"".join(rows)
+
+    def chunk(tag, data):
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+
+
+def _esc(s):
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def legend_rows(slices):
+    total = sum(v for _, v, _ in slices) or 1
+    return "".join(f'<tr><td style="padding:2px 6px"><span style="display:inline-block;width:12px;height:12px;background:{col}"></span></td>'
+                   f'<td style="padding:2px 10px 2px 0">{_esc(n)}</td><td style="padding:2px 10px 2px 0;text-align:right"><b>{fmt_dur(v)}</b></td>'
+                   f'<td style="padding:2px 0;text-align:right;color:#777">{100 * v / total:.0f} %</td></tr>' for n, v, col in slices)
+
+
+def report_html(label, start, end, pcs):
+    """Rapport de la semaine : un camembert par ordinateur (temps par logiciel) + détail par opération.
+    pcs = [{'pc', 'name' (surnom éventuel), 'user', 'total_sec', 'operations': [{'ref','total_sec','by_source'}]}]."""
+    cards = []
+    for p in pcs:
+        sl = source_slices(p["operations"])
+        ops = "".join(f'<tr><td style="padding:2px 10px 2px 0">{_esc(o["ref"])}</td><td style="text-align:right;padding:2px 0"><b>{fmt_dur(o["total_sec"])}</b></td>'
+                      f'<td style="padding:2px 0 2px 10px;color:#777">{_esc(", ".join(SOURCES.get(k, k) for k in sorted(o.get("by_source") or {})))}</td></tr>'
+                      for o in p["operations"][:12])
+        title = _esc(p.get("name") or p["pc"]) + (f' <span style="color:#777;font-weight:400">· {_esc(p["pc"])}</span>' if p.get("name") else "")
+        cards.append(f'<section><h2>{title} <small>{_esc(p.get("user", ""))}</small></h2>'
+                     f'<div class="row"><div>{pie_svg(sl)}</div><div><div class="tot">{fmt_dur(p["total_sec"])}</div>'
+                     f'<table>{legend_rows(sl) or "<tr><td>Aucune activité</td></tr>"}</table></div></div>'
+                     f'<table class="ops">{ops}</table></section>')
+    css = ("body{font:14px Segoe UI,Arial,sans-serif;background:#F3F2EE;color:#1F2328;margin:0;padding:24px}h1{font-size:20px;margin:0 0 4px}"
+           ".sub{color:#777;margin-bottom:18px}section{background:#fff;border:1px solid #DCDAD3;padding:16px 20px;margin:0 0 16px;max-width:760px}"
+           "h2{font-size:16px;margin:0 0 10px}h2 small{color:#777;font-weight:400}.row{display:flex;gap:24px;align-items:center}"
+           ".tot{font-size:26px;font-weight:700;margin-bottom:6px}.ops{margin-top:12px;border-top:1px solid #eee;padding-top:8px;font-size:13px}")
+    return (f'<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>AGOA TEMPS {label}</title><style>{css}</style></head><body>'
+            f'<h1>AGOA TEMPS — semaine {label}</h1><div class="sub">du {start.replace("T", " ")} au {end.replace("T", " ")} · temps par logiciel et par ordinateur</div>'
+            + "".join(cards) + "</body></html>")
+
+
+def email_html(s):
+    """Corps HTML du mail : camembert (image jointe cid:pie) + légende."""
+    sl = source_slices(s["operations"])
+    return (f'<div style="font:14px Segoe UI,Arial,sans-serif"><h3 style="margin:0 0 4px">Temps de travail — {_esc(s["pc"])} ({_esc(s["user"])})</h3>'
+            f'<div style="color:#777;margin-bottom:10px">du {s["start"].replace("T", " ")} au {s["end"].replace("T", " ")} · total {fmt_dur(s["total_sec"])}</div>'
+            f'<table><tr><td valign="top"><img src="cid:pie" width="220" height="220" alt="Camembert"></td><td valign="middle"><table>{legend_rows(sl)}</table></td></tr></table>'
+            f'<pre style="font:13px Consolas,monospace;margin-top:12px">{_esc(render_text(s))}</pre></div>')
