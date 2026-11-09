@@ -85,6 +85,22 @@ class Tracker(unittest.TestCase):
             self.assertEqual(sum(x["sec"] for x in e), 60)
             self.assertEqual(e[0]["file"], "LANDY67-A_RDC.vwx")
 
+    def test_multidoc_chrome(self):
+        with tempfile.TemporaryDirectory() as d:
+            tr = T.ActivityTracker(d, step=30, flush=60, clock=lambda: dt.datetime(2026, 11, 4, 9, 0), known_fn=lambda: KNOWN)
+            for _ in range(2):
+                tr.sample("chrome.exe", "Fiche BELLEVILLE112 - Ragic - Google Chrome", 1)
+            for _ in range(2):
+                tr.sample("chrome.exe", "YouTube - Google Chrome", 1)
+            for _ in range(2):
+                tr.sample("Multidoc.exe", "Multidoc - ORFILA6-A courrier", 1)
+            tr.sample("msedge.exe", "Multidoc tarifs", 1)           # navigateur : ne compte pas comme Multidoc
+            tr.close()
+            e = T.read_entries(d, dt.datetime(2026, 11, 1), dt.datetime(2026, 11, 8))
+            got = sorted((x["src"], x["ref"], x["sec"]) for x in e)
+            self.assertEqual(got, [("chrome", "", 60), ("chrome", "BELLEVILLE112", 60), ("multidoc", "ORFILA6-A", 60)])
+            self.assertTrue(all("title" not in x for x in e))
+
 
 if __name__ == "__main__":
     unittest.main()

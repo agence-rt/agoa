@@ -92,7 +92,7 @@ class TimeService:
         self.foreground, self.now = foreground, now
         self.state_path = os.path.join(temps_dir, "etat.json")
         self.ops_path = os.path.join(temps_dir, "operations.json")
-        self.tracker = T.ActivityTracker(temps_dir)
+        self.tracker = T.ActivityTracker(temps_dir, known_fn=self.known)
         self.stop_ev = threading.Event()
         self.last_error = ""
         self._last_ops = 0.0

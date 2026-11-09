@@ -17,7 +17,7 @@ import re
 import threading
 import unicodedata
 
-SOURCES = {"dtg": "DTG", "cctp": "CCTP", "vectorworks": "Vectorworks"}
+SOURCES = {"dtg": "DTG", "cctp": "CCTP", "vectorworks": "Vectorworks", "multidoc": "Multidoc", "chrome": "Chrome"}
 IDLE_LIMIT = 300            # secondes sans clavier/souris : le temps ne compte plus
 SIMILAR = 0.85              # seuil de ressemblance entre deux noms d'opération
 NO_REF = "(sans référence)"
@@ -232,13 +232,38 @@ def due_periods(last_sent, now, max_weeks=4):
 
 
 # --- surveillance de Vectorworks -----------------------------------------------------------------------------------
-class ActivityTracker:
-    """Cumule le temps passé dans Vectorworks, par fichier ouvert. sample(exe, title, idle) est appelé toutes les `step` secondes ;
-    un créneau est écrit au journal quand le fichier change, au bout de `flush` secondes, ou à l'arrêt."""
+BROWSERS = ("chrome.exe", "msedge.exe", "firefox.exe")
 
-    def __init__(self, temps_dir, step=5, flush=60, clock=dt.datetime.now):
-        self.dir, self.step, self.flush, self.clock = temps_dir, step, flush, clock
-        self.file, self.acc = None, 0.0
+
+def classify(exe, title):
+    """Logiciel surveillé au premier plan : vectorworks, multidoc, chrome ou None."""
+    e = (exe or "").lower()
+    if "vectorworks" in e:
+        return "vectorworks"
+    if "multidoc" in e or (e and e not in BROWSERS and "multidoc" in (title or "").lower()):
+        return "multidoc"
+    if e == "chrome.exe":
+        return "chrome"
+    return None
+
+
+def ref_from_title(title, known, loose=False):
+    """Opération citée dans un titre de fenêtre : code connu (Ragic) ; loose=True : aussi un motif NOM12-A."""
+    r = ref_from_filename(title or "", known)
+    if r and (loose or any(norm(r) == norm(k) for k in known)):
+        return r
+    return ""
+
+
+class ActivityTracker:
+    """Cumule le temps passé dans Vectorworks, Multidoc et Chrome, rattaché à l'opération citée dans la fenêtre.
+    sample(exe, title, idle) est appelé toutes les `step` secondes ; un créneau est écrit au journal quand le fichier / l'opération
+    change, au bout de `flush` secondes, ou à l'arrêt. Les titres de fenêtres ne sont JAMAIS enregistrés (sauf le nom du fichier
+    Vectorworks) : seul le code d'opération reconnu est conservé."""
+
+    def __init__(self, temps_dir, step=5, flush=60, clock=dt.datetime.now, known_fn=lambda: ()):
+        self.dir, self.step, self.flush, self.clock, self.known_fn = temps_dir, step, flush, clock, known_fn
+        self.key, self.acc = None, 0.0
         self.lock = threading.RLock()
 
     def sample(self, exe, title, idle):
@@ -246,29 +271,35 @@ class ActivityTracker:
             return self._sample(exe, title, idle)
 
     def _sample(self, exe, title, idle):
-        f = None
-        if exe and "vectorworks" in exe.lower() and idle < IDLE_LIMIT:
+        src = classify(exe, title) if idle < IDLE_LIMIT else None
+        key = None
+        if src == "vectorworks":
             f = vw_file_from_title(title) or "(fichier inconnu).vwx"
-        if f != self.file:
+            key = (src, re.sub(r"\.vwx\w*$", "", f, flags=re.I), f)
+        elif src:
+            try:
+                known = list(self.known_fn())
+            except Exception:
+                known = []
+            key = (src, ref_from_title(title, known, loose=(src == "multidoc")), None)
+        if key != self.key:
             self.close()
-        if f:
-            self.file = f
+        if key:
+            self.key = key
             self.acc += self.step
             if self.acc >= self.flush:
                 self._write()
-        return f
+        return key
 
     def _write(self):
         with self.lock:
-            self._write_locked()
-
-    def _write_locked(self):
-        if self.file and self.acc > 0:
-            try:
-                append_entry(self.dir, "vectorworks", re.sub(r"\.vwx\w*$", "", self.file, flags=re.I), self.acc, self.clock(), self.file)
-            except OSError:
-                pass
-        self.acc = 0.0
+            if self.key and self.acc > 0:
+                src, ref, f = self.key
+                try:
+                    append_entry(self.dir, src, ref, self.acc, self.clock(), f)
+                except OSError:
+                    pass
+            self.acc = 0.0
 
     def flush_now(self):
         """Écrit tout de suite le créneau en cours (avant une publication) sans changer de fichier."""
@@ -276,7 +307,7 @@ class ActivityTracker:
 
     def close(self):
         self._write()
-        self.file = None
+        self.key = None
 
 
 def win_foreground():
