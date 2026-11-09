@@ -2,7 +2,7 @@
 import datetime as dt
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import simpledialog, ttk
 
 import agoa_temps as T
 
@@ -51,6 +51,7 @@ class TempsWindow(tk.Toplevel):
         self.info = tk.Label(top, text="", font=("Segoe UI", 9), bg=BG, fg=MUTED)
         self.info.pack(side="left", padx=12)
         tk.Button(top, text="Actualiser", command=self.load, relief="flat", bg=INK, fg="white", padx=12, pady=3).pack(side="right")
+        tk.Button(top, text="Renommer le poste…", command=self.rename, relief="flat", bg="#E9E7E0", fg=INK, padx=12, pady=3).pack(side="right", padx=8)
         self.tree = ttk.Treeview(self, show="tree headings", selectmode="browse")
         sb = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
@@ -60,6 +61,28 @@ class TempsWindow(tk.Toplevel):
         self.tree.tag_configure("all", font=("Segoe UI", 10, "bold"), background="#F6D9D9")
         self.tree.tag_configure("old", foreground="#9A9A9A")
         self.tree.tag_configure("src", foreground="#6B6F76")
+        self.tree.bind("<Double-1>", lambda e: self.rename(self.tree.identify_row(e.y)))
+        self.nicks = {}
+        self.load()
+
+    def rename(self, iid=None):
+        """Donne un surnom à un poste (partagé par tous les postes via la Dropbox). Surnom vide = retour au nom de l'ordinateur."""
+        iid = iid if isinstance(iid, str) else (self.tree.selection() or [""])[0]
+        while iid and not iid.startswith("pc:"):
+            iid = self.tree.parent(iid)
+        if not iid:
+            self.info.config(text="Sélectionnez d'abord un poste (ou double-cliquez dessus).")
+            return
+        pc = iid[3:]
+        n = simpledialog.askstring("Surnom du poste", f"Surnom pour {pc} (vide = nom d'origine) :",
+                                   initialvalue=self.nicks.get(pc, ""), parent=self)
+        if n is None:
+            return
+        try:
+            self.svc.set_nickname(pc, n)
+        except Exception as e:
+            self.info.config(text="Surnom non enregistré : " + str(e)[:100])
+            return
         self.load()
 
     def load(self):
@@ -68,18 +91,20 @@ class TempsWindow(tk.Toplevel):
         def work():
             try:
                 data, d = self.svc.fetch_all()
+                nicks = self.svc.nicknames()
                 err = None
             except Exception as e:
-                data, d, err = {}, None, str(e)[:120]
+                data, d, err, nicks = {}, None, str(e)[:120], {}
             try:
-                self.after(0, lambda: self.show(data, d, err))
+                self.after(0, lambda: self.show(data, d, err, nicks))
             except Exception:
                 pass
         threading.Thread(target=work, daemon=True).start()
 
-    def show(self, data, folder, err):
+    def show(self, data, folder, err, nicks=None):
         if not self.winfo_exists():
             return
+        self.nicks = nicks or {}
         weeks, rows = collate(data)
         cols = [f"w{i}" for i in range(len(weeks))]
         self.tree.configure(columns=cols)
@@ -101,7 +126,9 @@ class TempsWindow(tk.Toplevel):
                 old = (dt.datetime.now() - dt.datetime.fromisoformat(r["updated"])).days >= 2
             except ValueError:
                 pass
-            label = f"{r['pc']}" + (f"  ({r['user']})" if r["user"] else "") + ("  — pas de synchro récente" if old else "")
+            nick = self.nicks.get(r["pc"])
+            label = (f"{nick}  ·  {r['pc']}" if nick else f"{r['pc']}") + (f"  ({r['user']})" if r["user"] else "") \
+                + ("  — pas de synchro récente" if old else "")
             pid = self.tree.insert("", "end", iid="pc:" + r["pc"], text=label, values=[hm(r["totals"].get(l, 0)) for l, _ in weeks],
                                    tags=("pc", "old") if old else ("pc",), open=True)
             for i, (ref, per, by_src) in enumerate(r["ops"]):

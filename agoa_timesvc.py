@@ -169,6 +169,24 @@ class TimeService:
         res[pc_name()] = self.local_payload()
         return res, d
 
+    # --- surnoms des postes (fichier partagé dans la Dropbox, sinon local) --------------------
+    def nick_path(self):
+        d = self.shared_dir()
+        return os.path.join(d, "_surnoms.json") if d else os.path.join(self.dir, "surnoms.json")
+
+    def nicknames(self):
+        j = _load(self.nick_path(), {})
+        return j if isinstance(j, dict) else {}
+
+    def set_nickname(self, pc, nick):
+        j = self.nicknames()
+        nick = (nick or "").strip()
+        if nick:
+            j[pc] = nick
+        else:
+            j.pop(pc, None)
+        _save(self.nick_path(), j)
+
     # --- opérations connues (Ragic) -------------------------------------------------
     def known(self):
         return _load(self.ops_path, [])
