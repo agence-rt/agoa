@@ -72,6 +72,16 @@
       "exe": "AGOA DATA.exe"
     },
     {
+      "id": "ml",
+      "onglet": "test",
+      "code": "ML",
+      "nom": "AGOA ML",
+      "description": "Boîte mail partagée de l'agence (Gmail + Ragic) : fils rattachés aux immeubles et opérations, prise en charge, statuts, kanban, notes et notifications",
+      "repo": "agence-rt/agoa-mail",
+      "asset": "*Setup*.exe",
+      "exe": "AGOA ML.exe"
+    },
+    {
       "id": "cg",
       "code": "CG",
       "onglet": "admin",
