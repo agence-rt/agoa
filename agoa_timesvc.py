@@ -14,6 +14,7 @@ import agoa_connections as conn
 import agoa_temps as T
 
 TO = "etudes@remithollet.fr"
+AUTO_MAIL = False        # envoi automatique du rapport hebdomadaire par mail : désactivé (le rapport reste enregistré et consultable dans ADMIN)
 OPS_SHEET = "operations/10"
 CODE_FIELD = "CODE TRAVAUX"
 
@@ -241,14 +242,12 @@ class TimeService:
         for start, end in T.due_periods(last, now):
             self.tracker.close()
             s = self.make_summary(start, end)
-            sent = False
-            try:
-                self.send_mail(s)
-                sent = True
-            except Exception as e:
-                self.last_error = "Envoi de la synthèse : " + str(e)[:150]
-            if not sent:                           # on réessaiera à la prochaine minute (Google non connecté, réseau…)
-                return
+            if AUTO_MAIL:
+                try:
+                    self.send_mail(s)
+                except Exception as e:
+                    self.last_error = "Envoi de la synthèse : " + str(e)[:150]
+                    return                         # on réessaiera à la prochaine minute (Google non connecté, réseau…)
             st["last_cutoff"] = end.isoformat()
             _save(self.state_path, st)
 
